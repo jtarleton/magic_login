@@ -1,0 +1,148 @@
+<?php
+
+/**
+ * @file
+ * Passwordless, email-based sign-in links.
+ */
+
+declare(strict_types=1);
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Url;
+
+/**
+ * Implements hook_help().
+ */
+function magic_login_help(string $route_name, RouteMatchInterface $route_match): ?string {
+  if ($route_name !== 'help.page.magic_login') {
+    return NULL;
+  }
+
+  return '<p>' . t('Sends single-use sign-in links by email, optionally creating an account the first time an address is seen. Configure it at <a href=":url">Magic Login settings</a>.', [
+    ':url' => Url::fromRoute('magic_login.settings')->toString(),
+  ]) . '</p>';
+}
+
+/**
+ * Implements hook_mail().
+ */
+function magic_login_mail(string $key, array &$message, array $params): void {
+  if ($key !== 'link') {
+    return;
+  }
+
+  $options = ['langcode' => $message['langcode']];
+  $site = \Drupal::config('system.site')->get('name');
+  $minutes = (int) round(($params['expiry'] ?? 900) / 60);
+
+  $message['subject'] = t('Your sign-in link for @site', ['@site' => $site], $options);
+
+  $body = [
+    t('Hello,', [], $options),
+    t('Use this link to sign in to @site:', ['@site' => $site], $options),
+    $params['url'],
+    \Drupal::translation()->formatPlural(
+      $minutes,
+      'The link works once and expires in 1 minute.',
+      'The link works once and expires in @count minutes.',
+      [],
+      $options,
+    ),
+    t("If you didn't ask to sign in, you can ignore this message. Nobody can use the link without access to this mailbox.", [], $options),
+  ];
+
+  $message['body'] = $body;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for user_login_form().
+ *
+ * Adds an inline "email me a link" section to the core login form.
+ *
+ * The part worth understanding is why the button carries its own #validate.
+ * UserLoginForm queues ::validateAuthentication and ::validateFinal on
+ * $form['#validate'], and validateAuthentication registers a flood event for
+ * every failed attempt. Submitting this button with an empty username would
+ * otherwise eat into the account's login flood budget and, with a tight
+ * user.flood config, lock the person out of password login entirely.
+ *
+ * #limit_validation_errors alone does not prevent that -- it strips the
+ * resulting errors, but the validators still run, flood side effect and all.
+ *
+ * Setting #validate on the button does prevent it: FormBuilder::processForm()
+ * copies the triggering element's handlers into form state, and
+ * FormValidator::executeValidateHandlers() prefers those over $form['#validate']
+ * entirely. Same mechanism for #submit.
+ *
+ * @see \Drupal\Core\Form\FormValidator::executeValidateHandlers()
+ */
+function magic_login_form_user_login_form_alter(array &$form, FormStateInterface $form_state): void {
+  if (!\Drupal::config('magic_login.settings')->get('login_form_integration')) {
+    return;
+  }
+
+  $form['magic_login'] = [
+    '#type' => 'details',
+    '#title' => t('Sign in with a link instead'),
+    '#weight' => 100,
+    '#open' => FALSE,
+  ];
+
+  $form['magic_login']['magic_login_mail'] = [
+    '#type' => 'email',
+    '#title' => t('Email address'),
+    '#description' => t('We will email you a link that signs you in. No password needed.'),
+    '#attributes' => [
+      'autocomplete' => 'email',
+      'autocapitalize' => 'none',
+      'autocorrect' => 'off',
+      'spellcheck' => 'false',
+    ],
+  ];
+
+  $form['magic_login']['magic_login_submit'] = [
+    '#type' => 'submit',
+    '#name' => 'magic_login_submit',
+    '#value' => t('Email me a sign-in link'),
+    // Button-level handlers: these replace the form-level ones, so none of
+    // UserLoginForm's authentication validators run for this button.
+    '#validate' => ['magic_login_user_login_form_validate'],
+    '#submit' => ['magic_login_user_login_form_submit'],
+    // Keeps the required username/password fields from erroring.
+    '#limit_validation_errors' => [['magic_login_mail']],
+  ];
+}
+
+/**
+ * Validates the magic-link section of the login form.
+ *
+ * @see magic_login_form_user_login_form_alter()
+ */
+function magic_login_user_login_form_validate(array &$form, FormStateInterface $form_state): void {
+  $mail = trim((string) $form_state->getValue('magic_login_mail'));
+
+  if ($mail === '') {
+    $form_state->setErrorByName('magic_login_mail', t('Enter the email address to send the link to.'));
+  }
+
+  // Deliberately no "no account with that address" error: that would turn the
+  // login form into an account-enumeration oracle.
+}
+
+/**
+ * Submit handler for the magic-link button on the login form.
+ */
+function magic_login_user_login_form_submit(array &$form, FormStateInterface $form_state): void {
+  $ip = \Drupal::requestStack()->getCurrentRequest()?->getClientIp();
+
+  \Drupal::service('magic_login.link_manager')
+    ->requestLink((string) $form_state->getValue('magic_login_mail'), $ip);
+
+  // Same message for every outcome -- see MagicLoginRequestForm::submitForm().
+  \Drupal::messenger()->addStatus(
+    t('If that address belongs to an account, a sign-in link is on its way. Check your inbox.')
+  );
+
+  $form_state->setRedirect('user.login');
+}

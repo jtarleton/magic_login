@@ -1,0 +1,37 @@
+magic_login.settings:
+  type: config_object
+  label: 'Magic Login settings'
+  mapping:
+    link_expiry:
+      type: integer
+      label: 'Link expiry in seconds'
+    login_form_integration:
+      type: boolean
+      label: 'Integrate with the core login form'
+    auto_register:
+      type: boolean
+      label: 'Create accounts for unrecognised email addresses'
+    auto_register_roles:
+      type: sequence
+      label: 'Roles for auto-created accounts'
+      sequence:
+        type: string
+        label: 'Role ID'
+    allowed_domains:
+      type: string
+      label: 'Allowed email domains'
+    blocked_domains:
+      type: string
+      label: 'Blocked email domains'
+    flood_email_limit:
+      type: integer
+      label: 'Requests allowed per email address'
+    flood_email_window:
+      type: integer
+      label: 'Email rate limit window in seconds'
+    flood_ip_limit:
+      type: integer
+      label: 'Requests allowed per IP address'
+    flood_ip_window:
+      type: integer
+      label: 'IP rate limit window in seconds'

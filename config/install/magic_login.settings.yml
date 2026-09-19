@@ -1,0 +1,27 @@
+# Seconds a link stays valid. Kept deliberately short; a link is also
+# invalidated by any successful login or password change on the account.
+link_expiry: 900
+
+# Integrate with the core user login form (adds an inline "email me a link"
+# section). Disable to keep /user/login untouched and use /user/login/link only.
+login_form_integration: true
+
+# Create an account when an unrecognised email address requests a link.
+# NOTE: this intentionally bypasses user.settings:register. Leave it off unless
+# you mean it.
+auto_register: false
+
+# Roles granted to auto-created accounts, as a list of role IDs.
+auto_register_roles: {}
+
+# Newline- or comma-separated domain lists applied to auto-registration.
+# allowed_domains empty means "any domain not explicitly blocked".
+allowed_domains: ''
+blocked_domains: ''
+
+# Rate limits. Email limits are keyed on a hash of the address, never the
+# address itself.
+flood_email_limit: 3
+flood_email_window: 3600
+flood_ip_limit: 20
+flood_ip_window: 3600

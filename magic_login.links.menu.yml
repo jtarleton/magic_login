@@ -1,0 +1,5 @@
+magic_login.settings:
+  title: 'Magic Login'
+  description: 'Configure passwordless email sign-in links.'
+  route_name: magic_login.settings
+  parent: user.admin_index

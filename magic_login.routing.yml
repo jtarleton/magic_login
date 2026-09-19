@@ -1,0 +1,33 @@
+magic_login.request:
+  path: '/user/login/link'
+  defaults:
+    _form: 'Drupal\magic_login\Form\MagicLoginRequestForm'
+    _title: 'Sign in with a link'
+  requirements:
+    _user_is_logged_in: 'FALSE'
+  options:
+    _maintenance_access: TRUE
+    no_cache: TRUE
+
+# The landing page for a link in an email. This route intentionally does NOT
+# authenticate on GET -- see MagicLoginConfirmForm for why.
+magic_login.confirm:
+  path: '/user/login/magic/{uid}/{timestamp}/{hash}'
+  defaults:
+    _form: 'Drupal\magic_login\Form\MagicLoginConfirmForm'
+    _title: 'Confirm sign-in'
+  requirements:
+    _user_is_logged_in: 'FALSE'
+    uid: \d+
+    timestamp: \d+
+  options:
+    _maintenance_access: TRUE
+    no_cache: TRUE
+
+magic_login.settings:
+  path: '/admin/config/people/magic-login'
+  defaults:
+    _form: 'Drupal\magic_login\Form\SettingsForm'
+    _title: 'Magic Login'
+  requirements:
+    _permission: 'administer magic login'

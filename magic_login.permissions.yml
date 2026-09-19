@@ -1,0 +1,4 @@
+administer magic login:
+  title: 'Administer Magic Login'
+  description: 'Configure link expiry, automatic account creation and rate limits.'
+  restrict access: true

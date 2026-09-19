@@ -1,0 +1,22 @@
+services:
+
+  logger.channel.magic_login:
+    parent: logger.channel_base
+    arguments: ['magic_login']
+
+  magic_login.link_manager:
+    class: Drupal\magic_login\MagicLinkManager
+    arguments:
+      - '@entity_type.manager'
+      - '@config.factory'
+      - '@plugin.manager.mail'
+      - '@language_manager'
+      - '@flood'
+      - '@datetime.time'
+      - '@transliteration'
+      - '@email.validator'
+      - '@password_generator'
+      - '@logger.channel.magic_login'
+
+  # Autowiring alias, so controllers/forms can type-hint the interface.
+  Drupal\magic_login\MagicLinkManagerInterface: '@magic_login.link_manager'
