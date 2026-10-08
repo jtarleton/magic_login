@@ -18,6 +18,34 @@ drush cr
 Configure at **Administration → Configuration → People → Magic Login**
 (`/admin/config/people/magic-login`).
 
+## Site-specific behaviour
+
+The module is project-agnostic. What a site decides is in settings, or in the
+site's own code:
+
+- `landing_path`: where people land after signing in (default `/`; the first
+  sign-in shows the welcome step, titled "Welcome to [site name]", first).
+- `signup_role_permissions` / `signup_role_excluded`: a role is only ever given
+  to a self-created account if it is not an admin role, not excluded, and has
+  no permission outside the list (default: no permissions at all).
+- Who may sign up and what they agree to: add fields and validators in a site
+  module's `hook_form_magic_login_signup_form_alter()` (e.g. a terms checkbox,
+  a country rule).
+- How the emails look: plain text here, with optional hints for an HTML mail
+  system (e.g. the html_mail module and a theme's `html-mail.html.twig`).
+
+## No passwords for customers
+
+Only administrators (a role marked as the admin role, or uid 1:
+`magic_login_uses_passwords()`) work with passwords. For everyone else, the
+account edit form shows nothing about passwords: Current password,
+Password, Confirm password, the strength meter and "Reset your password"
+are removed (`#access` FALSE, so submitted values are ignored too). Core
+only lets an account change its own email with the current password, which
+a passwordless account does not have, so the email is shown read-only with
+a pointer to the contact page; administrators can still change it.
+/user/password is hidden as well (`PasswordRouteSubscriber`).
+
 ## How the token works
 
 The token is an HMAC over `(uid, issue time, last login time, email, password
@@ -40,6 +68,58 @@ comparison uses `hash_equals()`.
 This deliberately does **not** reuse core's password-reset token or the
 `/user/reset` route. Reset links default to a 24-hour lifetime and land the user
 on a "set a new password" affordance; neither is wanted here.
+
+## Sign-in codes
+
+Every sign-in form offers two buttons: **Email me a sign-in link** and **Email
+me a 6-digit code**. Links and codes share the request rate limit.
+
+A code goes to `/user/login/code` (`MagicLoginCodeForm`), which already knows
+the address from the session. The field is `autocomplete="one-time-code"`,
+`inputmode="numeric"`, so iOS Security Code AutoFill ("From Mail") and Android
+keyboards offer the code from the email; six digits submit the form by
+themselves (`js/magic_login_code.js`).
+
+The script draws six digit boxes (`.magic-login-otp__cell`) over that **one**
+field, which stays on top, see-through, so taps, typing, paste, autofill and
+screen readers all still reach a single input (phones fill one field, not
+six). A paste takes the code out of a whole copied sentence ("Your code is:
+123456"); the server does the same (`verifyCode()` keeps only the digits).
+`css/magic_login.css` holds only the boxes' structure; a theme skins them.
+Without JavaScript it is a plain field.
+
+The email puts the code first in the
+subject (`123456 is your Example Site sign-in code`) and the first line, next to
+the word "code", with no other long numbers: that is what the phones' detection
+looks for. Plain text, like the link email.
+
+Security:
+
+- Six random digits (`random_int`), too short to be stateless, so one pending
+  code per address lives in the expirable key/value store (`magic_login_code`,
+  keyed by the hashed address). Only an HMAC of the code is stored, over the
+  same account state as a link token, so a sign-in by any route, or a password
+  or email change, kills it.
+- Single use; expires after `code_expiry` (600 s); discarded after
+  `code_max_attempts` (5) wrong tries; a new request replaces the old code.
+- Every attempt, right or wrong, counts against `flood_verify_ip_limit` (30)
+  and `flood_verify_email_limit` (10) per `flood_verify_window` (1 h). With 3
+  codes an hour per address, that is at most ~15 guesses an hour at 1 in a
+  million each.
+- Constant-time comparison; one error message for every failure; the code page
+  reads the same whether or not the address has an account.
+- The CAPTCHA (Altcha) is on every form that sends or checks a code, including
+  the code page, and a failed CAPTCHA stops before any guess is made. The code
+  page starts the Altcha check itself on load (its field has focus from the
+  start, so "check on focus" would never fire).
+
+**CAPTCHA and `#limit_validation_errors`.** Never put
+`#limit_validation_errors` on a button that must be CAPTCHA-protected: the
+captcha module's `processCaptchaElement()` skips the CAPTCHA entirely for such
+a button. The login-form buttons therefore make the hidden username/password
+fields optional instead (core still rejects an empty password login in
+`UserLoginForm::validateFinal()`). Checked on the live site: a POST without the
+Altcha solution is refused by every sign-in button.
 
 ## Why the link lands on a confirmation page
 
@@ -117,7 +197,9 @@ vendor/bin/phpunit -c core --group magic_login
 ```
 
 Kernel tests cover the token lifecycle (valid, expired, future-dated, forged,
-retired by login, retired by password change, blocked account),
+retired by login, retired by password change, blocked account), the code
+lifecycle (single use, attempts cap, expiry, retired by sign-in, the emailed
+subject, the per-address attempt limit),
 auto-registration, domain gating, username collision handling and rate limiting.
 
 Functional tests cover the end-to-end flow, single use, the GET-does-not-
@@ -137,6 +219,9 @@ src/MagicLinkManagerInterface.php
 src/MagicLinkManager.php        token generation/validation, flood, registration
 src/Form/MagicLoginRequestForm.php    /user/login/link
 src/Form/MagicLoginConfirmForm.php    the POST-to-authenticate landing page
+src/Form/MagicLoginCodeForm.php       /user/login/code: enter a 6-digit code
+js/magic_login_code.js          digits only, auto-submit, starts the Altcha check
+css/magic_login.css             link-or-code buttons, the code field
 src/Form/SettingsForm.php
 tests/src/Kernel/
 tests/src/Functional/

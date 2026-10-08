@@ -168,18 +168,18 @@ final class MagicLinkManagerTest extends KernelTestBase {
    *
    * @covers ::requestLink
    */
-  public function testAutoRegisterCreatesActiveAccount(): void {
+  public function testAutoRegisterCreatesPendingAccount(): void {
     $this->config('magic_login.settings')->set('auto_register', TRUE)->save();
 
     $result = $this->manager->requestLink('grace@example.com');
 
-    $this->assertSame(MagicLinkManagerInterface::RESULT_SENT, $result);
+    $this->assertSame(MagicLinkManagerInterface::RESULT_PENDING, $result);
 
     $accounts = $this->loadByMail('grace@example.com');
     $this->assertCount(1, $accounts);
 
     $account = reset($accounts);
-    $this->assertTrue($account->isActive());
+    $this->assertFalse($account->isActive(), 'Self-created accounts wait for admin approval.');
     $this->assertNotEmpty($account->getPassword(), 'Auto-created accounts get a random password, not a NULL one.');
   }
 
@@ -274,6 +274,121 @@ final class MagicLinkManagerTest extends KernelTestBase {
   /**
    * Creates a saved, active account.
    */
+  /**
+   * A code works once, ignores spacing and address case, and is stored only
+   * as an HMAC.
+   *
+   * @covers ::issueCode
+   * @covers ::verifyCode
+   */
+  public function testCodeLifecycle(): void {
+    $account = $this->createAccount('grace@example.com');
+    $code = $this->manager->issueCode($account);
+
+    $this->assertMatchesRegularExpression('/^\d{6}$/', $code);
+    $stored = $this->container->get('keyvalue.expirable')->get('magic_login_code')->getAll();
+    $this->assertStringNotContainsString($code, serialize($stored));
+
+    $wrong = sprintf('%06d', ((int) $code + 1) % 1000000);
+    $this->assertNull($this->manager->verifyCode('grace@example.com', $wrong, '192.0.2.1'));
+
+    $spaced = substr($code, 0, 3) . ' ' . substr($code, 3);
+    $resolved = $this->manager->verifyCode('GRACE@example.com', $spaced, '192.0.2.1');
+    $this->assertInstanceOf(UserInterface::class, $resolved);
+    $this->assertSame($account->id(), $resolved->id());
+
+    // Single use.
+    $this->assertNull($this->manager->verifyCode('grace@example.com', $code, '192.0.2.1'));
+  }
+
+  /**
+   * Too many wrong tries discard the code; the right one then fails too.
+   *
+   * @covers ::verifyCode
+   */
+  public function testCodeDiscardedAfterMaxAttempts(): void {
+    $account = $this->createAccount('hopper@example.com');
+    $code = $this->manager->issueCode($account);
+    $max = (int) $this->config('magic_login.settings')->get('code_max_attempts');
+
+    for ($i = 1; $i <= $max; $i++) {
+      $this->assertNull($this->manager->verifyCode('hopper@example.com', sprintf('%06d', ((int) $code + $i) % 1000000), '192.0.2.' . $i));
+    }
+    $this->assertNull($this->manager->verifyCode('hopper@example.com', $code, '192.0.2.200'));
+  }
+
+  /**
+   * An expired code is refused.
+   *
+   * @covers ::verifyCode
+   */
+  public function testCodeExpires(): void {
+    $account = $this->createAccount('lovelace@example.com');
+    $code = $this->manager->issueCode($account);
+
+    $store = $this->container->get('keyvalue.expirable')->get('magic_login_code');
+    foreach ($store->getAll() as $key => $pending) {
+      $pending['created'] -= (int) $this->config('magic_login.settings')->get('code_expiry') + 1;
+      $store->setWithExpire($key, $pending, 600);
+    }
+
+    $this->assertNull($this->manager->verifyCode('lovelace@example.com', $code, '192.0.2.1'));
+  }
+
+  /**
+   * Signing in by any route retires a pending code, like a link.
+   *
+   * @covers ::verifyCode
+   */
+  public function testCodeRetiredBySignIn(): void {
+    $account = $this->createAccount('turing@example.com');
+    $code = $this->manager->issueCode($account);
+
+    $account->setLastLoginTime(\Drupal::time()->getRequestTime() + 1)->save();
+
+    $this->assertNull($this->manager->verifyCode('turing@example.com', $code, '192.0.2.1'));
+  }
+
+  /**
+   * Asking for a code emails one, leading the subject, that then verifies.
+   *
+   * @covers ::requestLink
+   */
+  public function testRequestCodeEmailsCode(): void {
+    $this->createAccount('knuth@example.com');
+
+    $result = $this->manager->requestLink('knuth@example.com', '192.0.2.1', FALSE, MagicLinkManagerInterface::METHOD_CODE);
+    $this->assertSame(MagicLinkManagerInterface::RESULT_SENT, $result);
+
+    $mails = $this->container->get('state')->get('system.test_mail_collector', []);
+    $mail = end($mails);
+    $this->assertSame('code', $mail['key']);
+    $this->assertMatchesRegularExpression('/^\d{6} is your /', (string) $mail['subject']);
+
+    $code = substr((string) $mail['subject'], 0, 6);
+    $this->assertInstanceOf(UserInterface::class, $this->manager->verifyCode('knuth@example.com', $code, '192.0.2.1'));
+  }
+
+  /**
+   * The per-address attempt limit refuses even a correct code.
+   *
+   * @covers ::verifyCode
+   */
+  public function testVerifyRateLimitPerAddress(): void {
+    $account = $this->createAccount('hamilton@example.com');
+    $limit = (int) $this->config('magic_login.settings')->get('flood_verify_email_limit');
+
+    // Spend the address's budget with malformed-but-counted attempts on
+    // fresh codes (a code is discarded after code_max_attempts).
+    for ($i = 0; $i < $limit; $i++) {
+      $code = $this->manager->issueCode($account);
+      $this->manager->verifyCode('hamilton@example.com', sprintf('%06d', ((int) $code + 1) % 1000000), '192.0.2.' . (10 + $i));
+    }
+
+    $code = $this->manager->issueCode($account);
+    $this->assertNull($this->manager->verifyCode('hamilton@example.com', $code, '192.0.2.250'));
+  }
+
   private function createAccount(string $mail, ?string $name = NULL): UserInterface {
     $account = User::create([
       'name' => $name ?? explode('@', $mail)[0] . '_' . $this->randomMachineName(6),

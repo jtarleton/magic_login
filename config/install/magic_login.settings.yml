@@ -2,6 +2,16 @@
 # invalidated by any successful login or password change on the account.
 link_expiry: 900
 
+# Seconds a 6-digit sign-in code stays valid. Like a link, a code is also
+# retired by any successful login, password or email change, and after
+# code_max_attempts wrong tries.
+code_expiry: 600
+code_max_attempts: 5
+
+# Internal path people land on after signing in (the first sign-in goes to
+# the /welcome step first).
+landing_path: '/'
+
 # Integrate with the core user login form (adds an inline "email me a link"
 # section). Disable to keep /user/login untouched and use /user/login/link only.
 login_form_integration: true
@@ -11,8 +21,23 @@ login_form_integration: true
 # you mean it.
 auto_register: false
 
+# Turns on the public sign-up form at /signin: a new address gets an account
+# on its first sign-in. Off shows that form with its button disabled.
+public_signup: false
+
+# New self-created accounts stay blocked until an administrator activates
+# them. Off: the account is active at once and the first sign-in link goes
+# out immediately (clicking it proves the address).
+require_approval: true
+
 # Roles granted to auto-created accounts, as a list of role IDs.
 auto_register_roles: {}
+
+# A role is only ever given to a self-created account if it is not an admin
+# role, not listed here, and has no permission outside the list below
+# (empty: the role may have no permissions at all).
+signup_role_excluded: []
+signup_role_permissions: []
 
 # Newline- or comma-separated domain lists applied to auto-registration.
 # allowed_domains empty means "any domain not explicitly blocked".
@@ -25,3 +50,8 @@ flood_email_limit: 3
 flood_email_window: 3600
 flood_ip_limit: 20
 flood_ip_window: 3600
+
+# Rate limits on typing a code (every attempt counts, right or wrong).
+flood_verify_ip_limit: 30
+flood_verify_email_limit: 10
+flood_verify_window: 3600

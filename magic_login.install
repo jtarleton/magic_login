@@ -1,0 +1,130 @@
+<?php
+
+/**
+ * @file
+ * Install and update hooks for Magic Login.
+ */
+
+declare(strict_types=1);
+
+use Drupal\field\Entity\FieldConfig;
+use Drupal\field\Entity\FieldStorageConfig;
+
+/**
+ * Implements hook_install().
+ */
+function magic_login_install(): void {
+  _magic_login_ensure_display_name_field();
+}
+
+/**
+ * Creates the optional "Your name" field used by the welcome step.
+ */
+function _magic_login_ensure_display_name_field(): void {
+  if (!\Drupal::moduleHandler()->moduleExists('field')) {
+    return;
+  }
+  if (!FieldStorageConfig::loadByName('user', 'field_display_name')) {
+    FieldStorageConfig::create([
+      'field_name' => 'field_display_name',
+      'entity_type' => 'user',
+      'type' => 'string',
+      'settings' => ['max_length' => 60],
+    ])->save();
+  }
+  if (!FieldConfig::loadByName('user', 'user', 'field_display_name')) {
+    FieldConfig::create([
+      'field_name' => 'field_display_name',
+      'entity_type' => 'user',
+      'bundle' => 'user',
+      'label' => 'Your name',
+      'description' => 'Shown instead of your username. Optional.',
+      'required' => FALSE,
+    ])->save();
+    \Drupal::service('entity_display.repository')
+      ->getFormDisplay('user', 'user')
+      ->setComponent('field_display_name', ['type' => 'string_textfield', 'weight' => -5])
+      ->save();
+  }
+}
+
+/**
+ * Adds the public_signup setting (off) and the "Your name" user field.
+ */
+function magic_login_update_10001(): string {
+  $config = \Drupal::configFactory()->getEditable('magic_login.settings');
+  if ($config->get('public_signup') === NULL) {
+    $config->set('public_signup', FALSE)->save();
+  }
+  _magic_login_ensure_display_name_field();
+  return 'Added public_signup (off) and field_display_name.';
+}
+
+/**
+ * New accounts: trial_user role, approval-flow emails for email-link sign-in.
+ */
+function magic_login_update_10002(): string {
+  $done = [];
+  if (\Drupal\magic_login\MagicLinkManager::isSafeSignupRole('trial_user')) {
+    \Drupal::configFactory()->getEditable('magic_login.settings')
+      ->set('auto_register_roles', ['trial_user'])
+      ->save();
+    $done[] = 'auto_register_roles = trial_user';
+  }
+
+  $mail = \Drupal::configFactory()->getEditable('user.mail');
+  $mail->set('register_pending_approval', [
+    'subject' => 'Your [site:name] account request (pending approval)',
+    'body' => "Hello,\n\nThanks for signing up for [site:name]. New accounts are reviewed by an administrator, typically within 24 hours. We will email you as soon as yours is approved.\n\nThere is no password to create or remember: once approved, you sign in with your email address and a one-time link we email you.\n\nIf you didn't request an account, you can ignore this message.\n\n--  [site:name] team",
+  ]);
+  $mail->set('register_pending_approval_admin', [
+    'subject' => '[site:name]: new account waiting for approval ([user:mail])',
+    'body' => "[user:mail] has asked for an account on [site:name].\n\nApprove it by setting its status to Active:\n[user:edit-url]\n\nAccounts awaiting approval: [site:url]admin/people?status=2",
+  ]);
+  $mail->set('status_activated', [
+    'subject' => 'Your [site:name] account is approved',
+    'body' => "Hello,\n\nYour account at [site:name] has been approved.\n\nTo sign in, go to [site:url]user/login, enter your email address ([user:mail]) and we will email you a one-time sign-in link. There is no password: your email address is your only login.\n\n--  [site:name] team",
+  ]);
+  $mail->save();
+  $done[] = 'user.mail pending/approved texts';
+  return 'Updated: ' . implode(', ', $done) . '.';
+}
+
+/**
+ * Adds require_approval, switched off: new accounts are active at once.
+ */
+function magic_login_update_10003(): string {
+  \Drupal::configFactory()->getEditable('magic_login.settings')
+    ->set('require_approval', FALSE)
+    ->save();
+  return 'require_approval = FALSE: sign-up sends the first link straight away.';
+}
+
+/**
+ * Adds the sign-in code settings (6-digit codes as well as links).
+ */
+function magic_login_update_10004(): string {
+  $config = \Drupal::configFactory()->getEditable('magic_login.settings');
+  foreach (['code_expiry' => 600, 'code_max_attempts' => 5, 'flood_verify_ip_limit' => 30, 'flood_verify_email_limit' => 10, 'flood_verify_window' => 3600] as $key => $value) {
+    if ($config->get($key) === NULL) {
+      $config->set($key, $value);
+    }
+  }
+  $config->save();
+  return 'Sign-in code settings added.';
+}
+
+/**
+ * Adds landing_path and the self-created-account role settings (these were
+ * hard-coded; set them for the site after updating).
+ */
+function magic_login_update_10005(): string {
+  $config = \Drupal::configFactory()->getEditable('magic_login.settings');
+  foreach (['landing_path' => '/', 'signup_role_excluded' => [], 'signup_role_permissions' => []] as $key => $value) {
+    if ($config->get($key) === NULL) {
+      $config->set($key, $value);
+    }
+  }
+  $config->save();
+  return 'Added landing_path, signup_role_excluded, signup_role_permissions.';
+}

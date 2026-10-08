@@ -17,6 +17,12 @@ services:
       - '@email.validator'
       - '@password_generator'
       - '@logger.channel.magic_login'
+      - '@keyvalue.expirable'
 
   # Autowiring alias, so controllers/forms can type-hint the interface.
   Drupal\magic_login\MagicLinkManagerInterface: '@magic_login.link_manager'
+
+  magic_login.password_route_subscriber:
+    class: Drupal\magic_login\EventSubscriber\PasswordRouteSubscriber
+    tags:
+      - { name: event_subscriber }

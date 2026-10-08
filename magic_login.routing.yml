@@ -9,6 +9,18 @@ magic_login.request:
     _maintenance_access: TRUE
     no_cache: TRUE
 
+# "Enter your code": finishes a sign-in with an emailed 6-digit code.
+magic_login.code:
+  path: '/user/login/code'
+  defaults:
+    _form: 'Drupal\magic_login\Form\MagicLoginCodeForm'
+    _title: 'Enter your sign-in code'
+  requirements:
+    _user_is_logged_in: 'FALSE'
+  options:
+    _maintenance_access: TRUE
+    no_cache: TRUE
+
 # The landing page for a link in an email. This route intentionally does NOT
 # authenticate on GET -- see MagicLoginConfirmForm for why.
 magic_login.confirm:
@@ -17,7 +29,9 @@ magic_login.confirm:
     _form: 'Drupal\magic_login\Form\MagicLoginConfirmForm'
     _title: 'Confirm sign-in'
   requirements:
-    _user_is_logged_in: 'FALSE'
+    # Open to signed-in visitors too: the form offers to switch accounts
+    # instead of answering a clicked email link with "access denied".
+    _access: 'TRUE'
     uid: \d+
     timestamp: \d+
   options:
@@ -31,3 +45,26 @@ magic_login.settings:
     _title: 'Magic Login'
   requirements:
     _permission: 'administer magic login'
+
+# Public "sign up or sign in" page. Accounts are created on first use only
+# while the public_signup setting is on; otherwise the button is disabled.
+magic_login.signup:
+  path: '/signin'
+  defaults:
+    _form: 'Drupal\magic_login\Form\MagicLoginSignupForm'
+    _title: 'Sign in or create your account'
+  requirements:
+    _user_is_logged_in: 'FALSE'
+  options:
+    no_cache: TRUE
+
+# Optional profile step shown after an account's first sign-in.
+magic_login.welcome:
+  path: '/welcome'
+  defaults:
+    _form: 'Drupal\magic_login\Form\MagicLoginWelcomeForm'
+    _title_callback: '\Drupal\magic_login\Form\MagicLoginWelcomeForm::title'
+  requirements:
+    _user_is_logged_in: 'TRUE'
+  options:
+    no_cache: TRUE

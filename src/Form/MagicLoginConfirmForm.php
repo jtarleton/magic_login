@@ -27,11 +27,16 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
  *
  * So the GET renders a confirmation with a CSRF-protected POST button, and only
  * the POST calls user_login_finalize(). Automated fetchers do not POST.
+ *
+ * The page is open to signed-in visitors too. People often click the link in
+ * a browser that is still signed in (to the same or another account); that
+ * used to be a bare "access denied". The same account now just gets a
+ * "you're already signed in"; another account is offered a switch.
  */
 final class MagicLoginConfirmForm extends FormBase {
 
   public function __construct(
-    private readonly MagicLinkManagerInterface $linkManager,
+    protected MagicLinkManagerInterface $linkManager,
   ) {}
 
   /**
@@ -80,22 +85,51 @@ final class MagicLoginConfirmForm extends FormBase {
       return $form;
     }
 
+    $current = $this->currentUser();
+    if ((int) $current->id() === (int) $account->id()) {
+      // Nothing to do, and the token stays unspent.
+      $form['already'] = [
+        '#markup' => '<p>' . $this->t('You are already signed in as %name.', [
+          '%name' => $account->getEmail(),
+        ]) . '</p>',
+      ];
+      $form['continue'] = [
+        '#type' => 'link',
+        '#title' => $this->t('Continue'),
+        '#url' => magic_login_landing_url(),
+        '#attributes' => ['class' => ['button', 'button--primary']],
+      ];
+      return $form;
+    }
+
     // Stash only the identifiers; re-validate on submit so an expiry that
     // elapses between render and click is still caught.
     $form_state->set('magic_login_uid', (int) $uid);
     $form_state->set('magic_login_timestamp', (int) $timestamp);
     $form_state->set('magic_login_hash', (string) $hash);
 
-    $form['confirm'] = [
-      '#markup' => '<p>' . $this->t('You are about to sign in as %name.', [
-        '%name' => $account->getDisplayName(),
-      ]) . '</p>',
-    ];
+    if ($current->isAuthenticated()) {
+      $form['confirm'] = [
+        '#markup' => '<p>' . $this->t('This browser is signed in as %current. Continuing will sign you out of that account and sign you in as %name.', [
+          '%current' => $current->getEmail() ?: $current->getDisplayName(),
+          '%name' => $account->getEmail(),
+        ]) . '</p>',
+      ];
+    }
+    else {
+      $form['confirm'] = [
+        '#markup' => '<p>' . $this->t('You are about to sign in as %name.', [
+          '%name' => $account->getEmail(),
+        ]) . '</p>',
+      ];
+    }
 
     $form['actions'] = ['#type' => 'actions'];
     $form['actions']['submit'] = [
       '#type' => 'submit',
-      '#value' => $this->t('Sign in'),
+      '#value' => $current->isAuthenticated()
+        ? $this->t('Sign out and continue as @name', ['@name' => $account->getEmail()])
+        : $this->t('Sign in'),
       '#button_type' => 'primary',
     ];
 
@@ -127,6 +161,22 @@ final class MagicLoginConfirmForm extends FormBase {
     /** @var \Drupal\user\UserInterface $account */
     $account = $form_state->get('magic_login_account');
 
+    // Read before user_login_finalize() sets it.
+    $firstSignIn = (int) $account->getLastLoginTime() === 0;
+
+    $current = $this->currentUser();
+    if ($current->isAuthenticated()) {
+      // Switching accounts. Not user_logout(): its session_manager->destroy()
+      // suppresses every later session write in this request, so the new
+      // login would never reach the browser. Do what it does otherwise, then
+      // drop the old session's data and record so nothing carries over.
+      $this->getLogger('user')->info('Session closed for %name.', ['%name' => $current->getAccountName()]);
+      \Drupal::moduleHandler()->invokeAll('user_logout', [$current]);
+      $session = $this->getRequest()->getSession();
+      $session->clear();
+      $session->migrate(TRUE);
+    }
+
     // Updates the account's login timestamp, which is what retires the token.
     user_login_finalize($account);
 
@@ -138,7 +188,12 @@ final class MagicLoginConfirmForm extends FormBase {
 
     // Respects ?destination= via RedirectResponseSubscriber, which only honours
     // internal paths.
-    $form_state->setRedirect('entity.user.canonical', ['user' => $account->id()]);
+    if ($firstSignIn) {
+      $form_state->setRedirect('magic_login.welcome');
+    }
+    else {
+      $form_state->setRedirectUrl(magic_login_landing_url());
+    }
   }
 
 }
