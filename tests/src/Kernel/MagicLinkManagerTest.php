@@ -8,6 +8,7 @@ use Drupal\KernelTests\KernelTestBase;
 use Drupal\magic_login\MagicLinkManagerInterface;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * Token lifecycle, rate limiting and auto-registration.
@@ -15,6 +16,7 @@ use Drupal\user\UserInterface;
  * @group magic_login
  * @coversDefaultClass \Drupal\magic_login\MagicLinkManager
  */
+#[RunTestsInSeparateProcesses]
 final class MagicLinkManagerTest extends KernelTestBase {
 
   /**
@@ -209,6 +211,7 @@ final class MagicLinkManagerTest extends KernelTestBase {
   public function testAllowListExcludesOtherDomains(): void {
     $this->config('magic_login.settings')
       ->set('auto_register', TRUE)
+      ->set('require_approval', FALSE)
       ->set('allowed_domains', 'example.com, staff.example.com')
       ->save();
 

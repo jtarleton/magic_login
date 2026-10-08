@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Drupal\Tests\magic_login\Functional;
 
+use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Test\AssertMailTrait;
 use Drupal\Tests\BrowserTestBase;
 use Drupal\user\Entity\User;
+use PHPUnit\Framework\Attributes\RunTestsInSeparateProcesses;
 
 /**
  * End-to-end sign-in flow.
  *
  * @group magic_login
  */
+#[RunTestsInSeparateProcesses]
 final class MagicLoginTest extends BrowserTestBase {
 
   use AssertMailTrait;
@@ -43,10 +46,11 @@ final class MagicLoginTest extends BrowserTestBase {
     // The GET must not authenticate -- it renders a confirmation instead.
     $this->drupalGet($url);
     $this->assertSession()->pageTextContains('You are about to sign in as');
-    $this->assertFalse($this->drupalUserIsLoggedIn($account), 'A GET on the link does not open a session.');
+    $this->assertFalse($this->isSignedInAs($account), 'A GET on the link does not open a session.');
 
+    $this->drupalGet($url);
     $this->submitForm([], 'Sign in');
-    $this->assertTrue($this->drupalUserIsLoggedIn($account));
+    $this->assertTrue($this->isSignedInAs($account));
   }
 
   /**
@@ -61,13 +65,15 @@ final class MagicLoginTest extends BrowserTestBase {
 
     $this->drupalGet($url);
     $this->submitForm([], 'Sign in');
-    $this->assertTrue($this->drupalUserIsLoggedIn($account));
+    $this->assertTrue($this->isSignedInAs($account));
 
-    $this->drupalLogout();
+    // Drop the session (drupalLogout() expects the core password fields,
+    // which this module hides on the login form).
+    $this->getSession()->reset();
 
     $this->drupalGet($url);
     $this->assertSession()->pageTextContains('This sign-in link is no longer valid');
-    $this->assertFalse($this->drupalUserIsLoggedIn($account));
+    $this->assertFalse($this->isSignedInAs($account));
   }
 
   /**
@@ -116,7 +122,10 @@ final class MagicLoginTest extends BrowserTestBase {
    * Auto-registration creates an account for a new address.
    */
   public function testAutoRegistration(): void {
-    $this->config('magic_login.settings')->set('auto_register', TRUE)->save();
+    $this->config('magic_login.settings')
+      ->set('auto_register', TRUE)
+      ->set('require_approval', FALSE)
+      ->save();
 
     $this->drupalGet('user/login/link');
     $this->submitForm(['mail' => 'newcomer@example.com'], 'Email me a sign-in link');
@@ -147,6 +156,17 @@ final class MagicLoginTest extends BrowserTestBase {
 
     $this->drupalGet($url);
     $this->assertSession()->pageTextContains('This sign-in link is no longer valid');
+  }
+
+  /**
+   * Whether the browser session is signed in as the account.
+   *
+   * drupalUserIsLoggedIn() only knows sessions opened by drupalLogin(), so
+   * this asks the site: only the account itself may open its edit form.
+   */
+  private function isSignedInAs(AccountInterface $account): bool {
+    $this->drupalGet('user/' . $account->id() . '/edit');
+    return $this->getSession()->getStatusCode() === 200;
   }
 
   /**
