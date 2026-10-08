@@ -6,7 +6,6 @@ namespace Drupal\magic_login\Form;
 
 use Drupal\Core\Form\FormBase;
 use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\Url;
 use Drupal\user\Entity\User;
 use Drupal\user\UserInterface;
 
@@ -22,6 +21,9 @@ final class MagicLoginWelcomeForm extends FormBase {
     return 'magic_login_welcome_form';
   }
 
+  /**
+   * The current account, if it has a display name field to fill in.
+   */
   private function account(): ?UserInterface {
     $account = User::load($this->currentUser()->id());
     return $account instanceof UserInterface && $account->hasField('field_display_name') ? $account : NULL;
@@ -30,6 +32,7 @@ final class MagicLoginWelcomeForm extends FormBase {
   /**
    * {@inheritdoc}
    */
+
   /**
    * Title callback: "Welcome to [site name]".
    */

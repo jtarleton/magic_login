@@ -1,22 +1,67 @@
 # Magic Login
 
-Single-use, email-delivered sign-in links for Drupal 10.3+ / 11, with optional
-account creation the first time an address is seen.
+Passwordless sign-in for Drupal: visitors type their email address and get a
+single-use sign-in link, or a 6-digit code, by email. Optionally, an account
+is created the first time an address is seen.
 
-Built because the contrib options (`magic_link`, `magic_login_link`,
-`dripyard_simple_login`, `passwordless`) are all existing-user-only — none of
-them remove the signup step, which was the actual requirement.
+- **Sign-in links** land on a confirmation page; signing in takes a POST, so
+  mail scanners that open links do not use them up.
+- **6-digit codes** for when the email is on another device. The code page
+  works with iOS Security Code AutoFill and Android keyboard suggestions, and
+  takes a pasted code (even a whole copied sentence).
+- **Optional sign-up** (`/signin`), with admin approval and a welcome step.
+- **No passwords for non-administrators**: password fields and
+  `/user/password` are hidden from everyone but admins.
+- Rate limits per address and IP, no account enumeration, single-use tokens
+  bound to the account's state.
 
-## Install
+The existing contrib options (`magic_link`, `magic_login_link`,
+`dripyard_simple_login`, `passwordless`) are existing-user-only; none of them
+remove the sign-up step, which this module also covers.
+
+For a full description of the module, visit the
+[project page](https://www.drupal.org/project/magic_login).
+
+Submit bug reports and feature suggestions, or track changes in the
+[issue queue](https://www.drupal.org/project/issues/magic_login).
+
+
+## Requirements
+
+Drupal 10.3 or 11. No other modules are required.
+
+Optional:
+
+- A CAPTCHA module (e.g. [Altcha](https://www.drupal.org/project/altcha)):
+  its widget on the login form is moved next to the sign-in buttons, and the
+  code page waits for it before submitting.
+- An HTML mail system: the link and code emails carry hints (heading, button,
+  code) that an HTML mail renderer can use. Without one they are plain text.
+
+
+## Installation
+
+Install as you would normally install a contributed Drupal module:
 
 ```
-cp -r magic_login web/modules/custom/
+composer require drupal/magic_login
 drush en magic_login
-drush cr
 ```
 
-Configure at **Administration → Configuration → People → Magic Login**
-(`/admin/config/people/magic-login`).
+See [Installing Drupal Modules](https://www.drupal.org/docs/extending-drupal/installing-drupal-modules)
+for further information.
+
+
+## Configuration
+
+Configure at **Administration > Configuration > People > Magic Login**
+(`/admin/config/people/magic-login`): link and code lifetimes, rate limits,
+whether the login form offers links and codes, public sign-up and approval,
+allowed or blocked email domains, and where people land after signing in.
+The **Administer magic login** permission controls access to the settings.
+
+Site mail must work (Drupal's outgoing mail, or an SMTP / mailer module): both
+the link and the code are sent by email.
 
 ## Site-specific behaviour
 
@@ -220,8 +265,8 @@ src/MagicLinkManager.php        token generation/validation, flood, registration
 src/Form/MagicLoginRequestForm.php    /user/login/link
 src/Form/MagicLoginConfirmForm.php    the POST-to-authenticate landing page
 src/Form/MagicLoginCodeForm.php       /user/login/code: enter a 6-digit code
-js/magic_login_code.js          digits only, auto-submit, starts the Altcha check
-css/magic_login.css             link-or-code buttons, the code field
+js/magic_login_code.js          code boxes, paste, auto-submit, Altcha check
+css/magic_login.css             link-or-code buttons, code box structure
 src/Form/SettingsForm.php
 tests/src/Kernel/
 tests/src/Functional/
@@ -230,3 +275,8 @@ tests/src/Functional/
 All collaborators are constructor-injected; there is no `\Drupal::` service
 lookup in `src/`. The `.module` file uses the static accessors because
 procedural hooks have no container to inject into.
+
+
+## Maintainers
+
+- James Tarleton - [jtarleton](https://www.drupal.org/u/jtarleton)

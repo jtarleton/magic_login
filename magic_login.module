@@ -7,6 +7,8 @@
 
 declare(strict_types=1);
 
+use Drupal\user\Entity\Role;
+use Drupal\magic_login\MagicLinkManagerInterface;
 use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
@@ -118,31 +120,35 @@ function _magic_login_code_mail(array &$message, array $params): void {
  *   Strings or translatable markup, one paragraph each.
  *
  * @return string[]
+ *   The paragraphs, as plain strings.
  */
 function _magic_login_plain_paragraphs(array $parts): array {
   return array_map(static fn ($part): string => (string) $part, $parts);
 }
 
 /**
- * Session key: the address a code was last sent to, so the code page knows
- * it (and never has to ask again, or reveal anything about accounts).
+ * Session key: the address a code was last sent to.
+ *
+ * So the code page knows it (and never has to ask again, or reveal anything
+ * about accounts).
  */
 const MAGIC_LOGIN_CODE_SESSION = 'magic_login_code_email';
 
 /**
- * Requests a code for an address and remembers the address for the code
- * page. Same outcome, and the same next page, whether or not an account
- * exists.
+ * Requests a code for an address and remembers the address for the code page.
+ *
+ * Same outcome, and the same next page, whether or not an account exists.
  */
 function magic_login_request_code(string $email, bool $allowSignup = FALSE): void {
   $request = \Drupal::request();
-  \Drupal::service('magic_login.link_manager')->requestLink($email, $request->getClientIp(), $allowSignup, \Drupal\magic_login\MagicLinkManagerInterface::METHOD_CODE);
+  \Drupal::service('magic_login.link_manager')->requestLink($email, $request->getClientIp(), $allowSignup, MagicLinkManagerInterface::METHOD_CODE);
   $request->getSession()->set(MAGIC_LOGIN_CODE_SESSION, trim($email));
 }
 
 /**
- * Signs an account in after a valid link or code, and returns where to go
- * next (the welcome step the first time).
+ * Signs an account in after a valid link or code.
+ *
+ * Returns where to go next (the welcome step the first time).
  */
 function magic_login_complete_sign_in(UserInterface $account, string $via): Url {
   // Read before user_login_finalize() sets it.
@@ -233,8 +239,10 @@ function magic_login_approval_notice(): array {
 }
 
 /**
- * Where people land after signing in: the landing_path setting, which other
- * modules may adjust per user with hook_magic_login_landing_alter(Url &$url).
+ * Where people land after signing in.
+ *
+ * The landing_path setting, which other modules may adjust per user with
+ * hook_magic_login_landing_alter(Url &$url).
  */
 function magic_login_landing_url(): Url {
   $path = trim((string) \Drupal::config('magic_login.settings')->get('landing_path'));
@@ -292,8 +300,8 @@ function magic_login_menu_local_tasks_alter(array &$data, string $route_name, Re
  *
  * Setting #validate on the button does prevent it: FormBuilder::processForm()
  * copies the triggering element's handlers into form state, and
- * FormValidator::executeValidateHandlers() prefers those over $form['#validate']
- * entirely. Same mechanism for #submit.
+ * FormValidator::executeValidateHandlers() prefers those over
+ * $form['#validate'] entirely. Same mechanism for #submit.
  *
  * @see \Drupal\Core\Form\FormValidator::executeValidateHandlers()
  */
@@ -424,7 +432,7 @@ function magic_login_uses_passwords(AccountInterface $account): bool {
   if ((int) $account->id() === 1) {
     return TRUE;
   }
-  foreach (\Drupal\user\Entity\Role::loadMultiple($account->getRoles(TRUE)) as $role) {
+  foreach (Role::loadMultiple($account->getRoles(TRUE)) as $role) {
     if ($role->isAdmin()) {
       return TRUE;
     }
@@ -458,7 +466,7 @@ function magic_login_form_user_form_alter(array &$form, FormStateInterface $form
   if (isset($form['account']['mail']) && !\Drupal::currentUser()->hasPermission('administer users')) {
     $form['account']['mail']['#disabled'] = TRUE;
     $form['account']['mail']['#description'] = t('This is the email you sign in with. To change it, <a href=":contact">contact us</a>.', [
-      ':contact' => \Drupal::moduleHandler()->moduleExists('contact') ? \Drupal\Core\Url::fromRoute('contact.site_page')->toString() : '/',
+      ':contact' => \Drupal::moduleHandler()->moduleExists('contact') ? Url::fromRoute('contact.site_page')->toString() : '/',
     ]);
   }
 }

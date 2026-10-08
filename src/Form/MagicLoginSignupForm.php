@@ -17,9 +17,9 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  *
  * There is no separate sign-up: a new address gets an account the first time
  * it signs in. Site rules (terms to accept, where people may sign up from)
- * are added by a site module's form alter. Until the public_signup setting is on, the page renders with a
- * disabled button, and validateForm() refuses submissions as well, since a
- * disabled attribute alone stops nobody.
+ * are added by a site module's form alter. Until the public_signup setting is
+ * on, the page renders with a disabled button, and validateForm() refuses
+ * submissions as well, since a disabled attribute alone stops nobody.
  */
 final class MagicLoginSignupForm extends FormBase {
 

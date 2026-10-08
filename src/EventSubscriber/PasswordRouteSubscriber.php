@@ -28,6 +28,9 @@ final class PasswordRouteSubscriber implements EventSubscriberInterface {
     return [KernelEvents::REQUEST => ['onRequest', 31]];
   }
 
+  /**
+   * Hides the password routes unless the core login was asked for.
+   */
   public function onRequest(RequestEvent $event): void {
     $request = $event->getRequest();
     if (!in_array($request->attributes->get('_route'), self::ROUTES, TRUE)) {

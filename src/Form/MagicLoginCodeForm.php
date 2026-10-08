@@ -12,7 +12,7 @@ use Drupal\user\UserInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
 /**
- * "Enter your code" page at /user/login/code.
+ * The "Enter your code" page at /user/login/code.
  *
  * Reached after asking for a code on any sign-in form; the address it went to
  * is in the session (MAGIC_LOGIN_CODE_SESSION). Opened directly, it asks for
@@ -69,7 +69,7 @@ final class MagicLoginCodeForm extends FormBase {
     if ($email !== '') {
       $form['intro'] = [
         '#markup' => '<p class="magic-login-code-form__lead">' . $this->t('If %mail has an account, we’ve emailed it a 6-digit code. Type it below.', ['%mail' => $email]) . '</p>'
-          . '<p class="magic-login-code-form__hint">' . $this->t('On a phone, the code may pop up above your keyboard. Tap it to fill it in. It works for @minutes minutes.', ['@minutes' => $minutes]) . '</p>',
+        . '<p class="magic-login-code-form__hint">' . $this->t('On a phone, the code may pop up above your keyboard. Tap it to fill it in. It works for @minutes minutes.', ['@minutes' => $minutes]) . '</p>',
       ];
     }
     else {

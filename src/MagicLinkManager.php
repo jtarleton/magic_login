@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\magic_login;
 
+use Drupal\user\RoleInterface;
 use Drupal\Component\Datetime\TimeInterface;
 use Drupal\Component\Transliteration\TransliterationInterface;
 use Drupal\Component\Utility\Crypt;
@@ -221,9 +222,10 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
   }
 
   /**
-   * Issues a new code for an account, replacing any pending one, and returns
-   * it. Public for tests and admin tooling; normal use goes through
-   * requestLink(..., METHOD_CODE).
+   * Issues a new code for an account, replacing any pending one.
+   *
+   * Returns the code. Public for tests and admin tooling; normal use goes
+   * through requestLink(..., METHOD_CODE).
    */
   public function issueCode(UserInterface $account): string {
     $code = str_pad((string) random_int(0, 10 ** self::CODE_LENGTH - 1), self::CODE_LENGTH, '0', STR_PAD_LEFT);
@@ -506,6 +508,7 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
   /**
    * Hands a link message to the mail system.
    */
+
   /**
    * Whether a role is limited enough for a self-created account.
    *
@@ -521,12 +524,15 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
       return FALSE;
     }
     $role = \Drupal::entityTypeManager()->getStorage('user_role')->load($rid);
-    if (!$role instanceof \Drupal\user\RoleInterface || $role->isAdmin()) {
+    if (!$role instanceof RoleInterface || $role->isAdmin()) {
       return FALSE;
     }
     return array_diff($role->getPermissions(), (array) $config->get('signup_role_permissions')) === [];
   }
 
+  /**
+   * Emails a sign-in link to an account.
+   */
   private function send(UserInterface $account): bool {
     $timestamp = $this->time->getRequestTime();
     $langcode = $account->getPreferredLangcode();

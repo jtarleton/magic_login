@@ -7,6 +7,7 @@
 
 declare(strict_types=1);
 
+use Drupal\magic_login\MagicLinkManager;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 
@@ -65,7 +66,7 @@ function magic_login_update_10001(): string {
  */
 function magic_login_update_10002(): string {
   $done = [];
-  if (\Drupal\magic_login\MagicLinkManager::isSafeSignupRole('trial_user')) {
+  if (MagicLinkManager::isSafeSignupRole('trial_user')) {
     \Drupal::configFactory()->getEditable('magic_login.settings')
       ->set('auto_register_roles', ['trial_user'])
       ->save();
@@ -105,7 +106,14 @@ function magic_login_update_10003(): string {
  */
 function magic_login_update_10004(): string {
   $config = \Drupal::configFactory()->getEditable('magic_login.settings');
-  foreach (['code_expiry' => 600, 'code_max_attempts' => 5, 'flood_verify_ip_limit' => 30, 'flood_verify_email_limit' => 10, 'flood_verify_window' => 3600] as $key => $value) {
+  $defaults = [
+    'code_expiry' => 600,
+    'code_max_attempts' => 5,
+    'flood_verify_ip_limit' => 30,
+    'flood_verify_email_limit' => 10,
+    'flood_verify_window' => 3600,
+  ];
+  foreach ($defaults as $key => $value) {
     if ($config->get($key) === NULL) {
       $config->set($key, $value);
     }
@@ -115,8 +123,9 @@ function magic_login_update_10004(): string {
 }
 
 /**
- * Adds landing_path and the self-created-account role settings (these were
- * hard-coded; set them for the site after updating).
+ * Adds landing_path and the self-created-account role settings.
+ *
+ * These were hard-coded; set them for the site after updating.
  */
 function magic_login_update_10005(): string {
   $config = \Drupal::configFactory()->getEditable('magic_login.settings');

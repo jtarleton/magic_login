@@ -274,9 +274,11 @@ final class MagicLinkManagerTest extends KernelTestBase {
   /**
    * Creates a saved, active account.
    */
+
   /**
-   * A code works once, ignores spacing and address case, and is stored only
-   * as an HMAC.
+   * A code works once, ignores spacing and address case, is stored hashed.
+   *
+   * Only an HMAC of the code is kept.
    *
    * @covers ::issueCode
    * @covers ::verifyCode
@@ -389,6 +391,9 @@ final class MagicLinkManagerTest extends KernelTestBase {
     $this->assertNull($this->manager->verifyCode('hamilton@example.com', $code, '192.0.2.250'));
   }
 
+  /**
+   * Creates an active account with the given email address.
+   */
   private function createAccount(string $mail, ?string $name = NULL): UserInterface {
     $account = User::create([
       'name' => $name ?? explode('@', $mail)[0] . '_' . $this->randomMachineName(6),

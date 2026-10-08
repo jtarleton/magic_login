@@ -1,7 +1,6 @@
 name: 'Magic Login'
 type: module
-description: 'Passwordless, email-based sign-in links, with optional account creation on first use.'
-package: Custom
+description: 'Passwordless sign-in by emailed single-use link or 6-digit code, with optional account creation on first use.'
 core_version_requirement: ^10.3 || ^11
 configure: magic_login.settings
 dependencies:
