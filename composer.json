@@ -1,0 +1,14 @@
+{
+    "name": "jtarleton/magic_login",
+    "description": "Passwordless Drupal login via emailed magic sign-in link or magic six-digit code.",
+    "type": "drupal-module",
+    "license": "GPL-2.0-or-later",
+    "homepage": "https://drupal.org",
+    "support": {
+        "issues": "https://drupal.org",
+        "source": "https://drupal.org"
+    },
+    "require": {
+        "drupal/core": "^10.0 || ^11.0"
+    }
+}
