@@ -491,7 +491,7 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
   }
 
   /**
-   * Splits an admin-entered domain list into normalised domains.
+   * Splits an admin-entered domain list into normalized domains.
    *
    * @return string[]
    *   Lowercased domains, leading "@" and "." stripped.

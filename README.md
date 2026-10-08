@@ -227,7 +227,7 @@ first.
 - **Email case sensitivity.** Lookup uses `loadByProperties(['mail' => ...])`,
   matching core. MySQL's default collation makes that case-insensitive;
   Postgres makes it case-sensitive, so `Ada@example.com` and `ada@example.com`
-  can end up as two accounts. Normalise on input if that matters to you.
+  can end up as two accounts. Normalize on input if that matters to you.
 - **Mail deliverability.** A link that lands in spam is a login that silently
   fails. If the site is not already sending transactional mail through
   something with SPF/DKIM aligned, sort that out first — this module makes mail
