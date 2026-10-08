@@ -28,6 +28,11 @@ interface MagicLinkManagerInterface {
   public const RESULT_BLOCKED = 'blocked';
 
   /**
+   * Outcome: a new account was created, blocked until an admin approves it.
+   */
+  public const RESULT_PENDING = 'pending';
+
+  /**
    * Outcome: a rate limit was hit.
    */
   public const RESULT_FLOODED = 'flooded';
@@ -43,6 +48,21 @@ interface MagicLinkManagerInterface {
   public const RESULT_MAIL_FAILED = 'mail_failed';
 
   /**
+   * Delivery method: a single-use sign-in link.
+   */
+  public const METHOD_LINK = 'link';
+
+  /**
+   * Delivery method: a single-use 6-digit code, typed on the sign-in page.
+   */
+  public const METHOD_CODE = 'code';
+
+  /**
+   * Digits in a sign-in code.
+   */
+  public const CODE_LENGTH = 6;
+
+  /**
    * Handles a request for a sign-in link.
    *
    * Callers MUST NOT vary their user-facing response on the return value: doing
@@ -53,11 +73,37 @@ interface MagicLinkManagerInterface {
    *   The submitted email address.
    * @param string|null $ip
    *   Client IP for rate limiting, or NULL to use the current request.
+   * @param bool $allowSignup
+   *   Create an account for an unknown address even when auto_register is
+   *   off. The public sign-up form passes the public_signup setting here.
+   * @param string $method
+   *   self::METHOD_LINK (default) or self::METHOD_CODE. Links and codes share
+   *   one rate limit.
    *
    * @return string
    *   One of the self::RESULT_* constants.
    */
-  public function requestLink(string $email, ?string $ip = NULL): string;
+  public function requestLink(string $email, ?string $ip = NULL, bool $allowSignup = FALSE, string $method = self::METHOD_LINK): string;
+
+  /**
+   * Checks a typed sign-in code and returns the account it signs in.
+   *
+   * Every call counts against the verification rate limits, and against the
+   * code's own attempt budget; a code is discarded after too many wrong
+   * tries, when it expires, and when it is used. As with requestLink(),
+   * callers MUST show the same error for every failure.
+   *
+   * @param string $email
+   *   The address the code was sent to.
+   * @param string $code
+   *   The code as typed (spaces and dashes are ignored).
+   * @param string|null $ip
+   *   Client IP for rate limiting, or NULL to use the current request.
+   *
+   * @return \Drupal\user\UserInterface|null
+   *   The account, or NULL for a wrong, expired, used or rate-limited code.
+   */
+  public function verifyCode(string $email, string $code, ?string $ip = NULL): ?UserInterface;
 
   /**
    * Builds the absolute sign-in URL for an account.

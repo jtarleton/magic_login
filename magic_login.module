@@ -7,9 +7,12 @@
 
 declare(strict_types=1);
 
+use Drupal\Core\Cache\RefinableCacheableDependencyInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Routing\RouteMatchInterface;
+use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Url;
+use Drupal\user\UserInterface;
 
 /**
  * Implements hook_help().
@@ -28,6 +31,10 @@ function magic_login_help(string $route_name, RouteMatchInterface $route_match):
  * Implements hook_mail().
  */
 function magic_login_mail(string $key, array &$message, array $params): void {
+  if ($key === 'code') {
+    _magic_login_code_mail($message, $params);
+    return;
+  }
   if ($key !== 'link') {
     return;
   }
@@ -39,20 +46,233 @@ function magic_login_mail(string $key, array &$message, array $params): void {
   $message['subject'] = t('Your sign-in link for @site', ['@site' => $site], $options);
 
   $body = [
-    t('Hello,', [], $options),
-    t('Use this link to sign in to @site:', ['@site' => $site], $options),
+    // Short, plain words, like the sign-in pages.
+    t('Hi,', [], $options),
+    t('Tap this link to sign in to @site:', ['@site' => $site], $options),
     $params['url'],
     \Drupal::translation()->formatPlural(
       $minutes,
-      'The link works once and expires in 1 minute.',
-      'The link works once and expires in @count minutes.',
+      'It works once, for 1 minute.',
+      'It works once, for @count minutes.',
       [],
       $options,
     ),
-    t("If you didn't ask to sign in, you can ignore this message. Nobody can use the link without access to this mailbox.", [], $options),
+    t('Didn’t ask to sign in? Just ignore this email. Only someone who can open your email can use this link.', [], $options),
   ];
 
-  $message['body'] = $body;
+  $message['body'] = _magic_login_plain_paragraphs($body);
+
+  // Hints for an HTML mail system (e.g. the html_mail module); ignored by
+  // plain-text mail. Nothing here depends on one being installed.
+  $message['html_mail'] = [
+    'heading' => t('Sign in to @site', ['@site' => $site], $options),
+    'button' => ['label' => t('Sign in', [], $options), 'url' => $params['url']],
+    'fallback_url' => $params['url'],
+    'preheader' => t('Tap to sign in. It works once, for @count minutes.', ['@count' => $minutes], $options),
+  ];
+}
+
+/**
+ * The sign-in code email.
+ *
+ * Written for the phone's one-time-code detection (iOS Mail / Security Code
+ * AutoFill, Gboard and Android's notification suggestions): the code leads
+ * the subject and the first line, right next to the word "code", and the
+ * message holds no other long numbers. Plain text, like the link email.
+ */
+function _magic_login_code_mail(array &$message, array $params): void {
+  $options = ['langcode' => $message['langcode']];
+  $site = \Drupal::config('system.site')->get('name');
+  $code = (string) $params['code'];
+  $minutes = (int) round(($params['expiry'] ?? 600) / 60);
+
+  $message['subject'] = t('@code is your @site sign-in code', ['@code' => $code, '@site' => $site], $options);
+  $message['body'] = _magic_login_plain_paragraphs([
+    t('Your @site sign-in code is: @code', ['@site' => $site, '@code' => $code], $options),
+    t('Type it on the sign-in page. It works once, for @minutes minutes.', ['@minutes' => $minutes], $options),
+    t('Don’t share this code with anyone. We will never ask you for it.', [], $options),
+    t('Didn’t ask to sign in? Just ignore this email. Only someone who can open your email can use this code.', [], $options),
+  ]);
+
+  // Hints for an HTML mail system; see magic_login_mail(). The code also
+  // stays in the subject and the plain-text part, where phones look for it.
+  $message['html_mail'] = [
+    'heading' => t('Your sign-in code', [], $options),
+    'code' => $code,
+    'preheader' => t('Your @site sign-in code is @code', ['@site' => $site, '@code' => $code], $options),
+    // The code box selects as a whole (user-select: all in the template).
+    'notice' => t('Tap the code to select it, then copy and paste it on the sign-in page. On a phone, it may also pop up above your keyboard there.', [], $options),
+  ];
+}
+
+/**
+ * Mail body paragraphs as plain strings.
+ *
+ * Core's PhpMail joins body parts with blank lines either way, but
+ * symfony_mailer's legacy path (LegacyMailerHelper::formatBody()) inserts a
+ * MarkupInterface part (what t() returns) as raw HTML with no <p>, so the
+ * paragraphs ran together; plain strings go through the plain_text format
+ * instead (escaped, a paragraph each, URLs linked).
+ *
+ * @param array $parts
+ *   Strings or translatable markup, one paragraph each.
+ *
+ * @return string[]
+ */
+function _magic_login_plain_paragraphs(array $parts): array {
+  return array_map(static fn ($part): string => (string) $part, $parts);
+}
+
+/**
+ * Session key: the address a code was last sent to, so the code page knows
+ * it (and never has to ask again, or reveal anything about accounts).
+ */
+const MAGIC_LOGIN_CODE_SESSION = 'magic_login_code_email';
+
+/**
+ * Requests a code for an address and remembers the address for the code
+ * page. Same outcome, and the same next page, whether or not an account
+ * exists.
+ */
+function magic_login_request_code(string $email, bool $allowSignup = FALSE): void {
+  $request = \Drupal::request();
+  \Drupal::service('magic_login.link_manager')->requestLink($email, $request->getClientIp(), $allowSignup, \Drupal\magic_login\MagicLinkManagerInterface::METHOD_CODE);
+  $request->getSession()->set(MAGIC_LOGIN_CODE_SESSION, trim($email));
+}
+
+/**
+ * Signs an account in after a valid link or code, and returns where to go
+ * next (the welcome step the first time).
+ */
+function magic_login_complete_sign_in(UserInterface $account, string $via): Url {
+  // Read before user_login_finalize() sets it.
+  $firstSignIn = (int) $account->getLastLoginTime() === 0;
+  // Updates the account's login timestamp, which retires outstanding links
+  // and codes.
+  user_login_finalize($account);
+  \Drupal::logger('magic_login')->notice('Session opened for %name via @via.', [
+    '%name' => $account->getAccountName(),
+    '@via' => $via,
+  ]);
+  \Drupal::messenger()->addStatus(t('You are signed in.'));
+  return $firstSignIn ? Url::fromRoute('magic_login.welcome') : magic_login_landing_url();
+}
+
+/**
+ * The two "send me" buttons shared by every sign-in form: a link, or a code.
+ *
+ * @param string $linkLabel
+ *   Label for the link button.
+ * @param array $extra
+ *   Extra properties for both buttons (e.g. #validate, #submit).
+ * @param bool $primary
+ *   Whether the link button is the primary action.
+ */
+function magic_login_method_buttons(string $linkLabel, array $extra = [], bool $primary = TRUE): array {
+  return [
+    '#type' => 'container',
+    '#attributes' => ['class' => ['magic-login-methods']],
+    'magic_login_submit' => [
+      '#type' => 'submit',
+      '#name' => 'magic_login_submit',
+      '#value' => $linkLabel,
+      '#button_type' => $primary ? 'primary' : '',
+    ] + $extra,
+    'magic_login_code_submit' => [
+      '#type' => 'submit',
+      '#name' => 'magic_login_code_submit',
+      '#value' => t('Email me a 6-digit code'),
+      '#attributes' => ['class' => ['magic-login-methods__code']],
+    ] + $extra,
+    'help' => [
+      '#type' => 'html_tag',
+      '#tag' => 'p',
+      '#attributes' => ['class' => ['magic-login-methods__help']],
+      '#value' => t('<strong>Link:</strong> tap it in the email. <strong>Code:</strong> type it here. Use the code if your email is on another device.'),
+    ],
+  ];
+}
+
+/**
+ * Whether the code button was the one pressed.
+ */
+function magic_login_code_pressed(FormStateInterface $form_state): bool {
+  return (($form_state->getTriggeringElement()['#name'] ?? '') === 'magic_login_code_submit');
+}
+
+/**
+ * Query parameter that reveals the core username/password login.
+ *
+ * Only admins are told about it: /user/login?showcore=1.
+ */
+const MAGIC_LOGIN_SHOW_CORE = 'showcore';
+
+/**
+ * Whether self-created accounts wait for an administrator.
+ */
+function magic_login_requires_approval(): bool {
+  return (bool) (\Drupal::config('magic_login.settings')->get('require_approval') ?? TRUE);
+}
+
+/**
+ * Notice shown on every sign-in form while new accounts wait for approval.
+ */
+function magic_login_approval_notice(): array {
+  $cache = ['tags' => ['config:magic_login.settings']];
+  if (!magic_login_requires_approval()) {
+    return ['#cache' => $cache];
+  }
+  return [
+    '#cache' => $cache,
+    '#type' => 'html_tag',
+    '#tag' => 'p',
+    '#attributes' => ['class' => ['magic-login-approval-notice']],
+    '#value' => t('<strong>New accounts need approval.</strong> We check each one, usually within a day, and email you when yours is ready.'),
+    '#weight' => 90,
+  ];
+}
+
+/**
+ * Where people land after signing in: the landing_path setting, which other
+ * modules may adjust per user with hook_magic_login_landing_alter(Url &$url).
+ */
+function magic_login_landing_url(): Url {
+  $path = trim((string) \Drupal::config('magic_login.settings')->get('landing_path'));
+  // Internal paths only; anything else falls back to the front page.
+  if ($path === '' || $path[0] !== '/' || str_starts_with($path, '//')) {
+    $url = Url::fromRoute('<front>');
+  }
+  else {
+    $url = Url::fromUserInput($path);
+  }
+  \Drupal::moduleHandler()->alter('magic_login_landing', $url);
+  return $url;
+}
+
+/**
+ * Whether the current request asked for the core password login.
+ */
+function magic_login_show_core(): bool {
+  return \Drupal::request()->query->get(MAGIC_LOGIN_SHOW_CORE) === '1';
+}
+
+/**
+ * Implements hook_menu_local_tasks_alter().
+ *
+ * Hides the "Reset your password" tab on the login page unless the core
+ * login is showing; password reset is part of what ?showcore=1 reveals.
+ */
+function magic_login_menu_local_tasks_alter(array &$data, string $route_name, RefinableCacheableDependencyInterface &$cacheability): void {
+  if ($route_name !== 'user.login'
+    || !\Drupal::config('magic_login.settings')->get('login_form_integration')) {
+    return;
+  }
+  $cacheability->addCacheContexts(['url.query_args:' . MAGIC_LOGIN_SHOW_CORE]);
+  if (!magic_login_show_core()) {
+    foreach ($data['tabs'] ?? [] as $level => $tabs) {
+      unset($data['tabs'][$level]['user.pass']);
+    }
+  }
 }
 
 /**
@@ -67,8 +287,8 @@ function magic_login_mail(string $key, array &$message, array $params): void {
  * otherwise eat into the account's login flood budget and, with a tight
  * user.flood config, lock the person out of password login entirely.
  *
- * #limit_validation_errors alone does not prevent that -- it strips the
- * resulting errors, but the validators still run, flood side effect and all.
+ * (#limit_validation_errors would also silence those, but it makes the
+ * CAPTCHA skip itself; see below.)
  *
  * Setting #validate on the button does prevent it: FormBuilder::processForm()
  * copies the triggering element's handlers into form state, and
@@ -82,17 +302,40 @@ function magic_login_form_user_login_form_alter(array &$form, FormStateInterface
     return;
   }
 
-  $form['magic_login'] = [
-    '#type' => 'details',
-    '#title' => t('Sign in with a link instead'),
-    '#weight' => 100,
-    '#open' => FALSE,
-  ];
+  $form['#cache']['contexts'][] = 'url.query_args:' . MAGIC_LOGIN_SHOW_CORE;
+
+  if (!magic_login_show_core()) {
+    // Email link only. #access FALSE also means submitted name/pass values
+    // are ignored, so a password POST without ?showcore=1 cannot log in.
+    $form['name']['#access'] = FALSE;
+    $form['pass']['#access'] = FALSE;
+    $form['actions']['#access'] = FALSE;
+
+    $form['magic_login'] = [
+      '#type' => 'container',
+      'intro' => [
+        '#markup' => '<p>' . t('Type your email. We’ll send you a link or a 6-digit code to sign in. No password needed.') . '</p>',
+      ],
+    ];
+  }
+  else {
+    // Password reset is part of what ?showcore=1 reveals (see
+    // PasswordRouteSubscriber), so link to it with the parameter kept.
+    $form['pass']['#description'] = t('<a href=":url">Forgot your password?</a>', [
+      ':url' => Url::fromRoute('user.pass', [], ['query' => [MAGIC_LOGIN_SHOW_CORE => '1']])->toString(),
+    ]);
+    $form['magic_login'] = [
+      '#type' => 'details',
+      '#title' => t('Sign in with a link instead'),
+      '#weight' => 100,
+      '#open' => FALSE,
+    ];
+  }
 
   $form['magic_login']['magic_login_mail'] = [
     '#type' => 'email',
     '#title' => t('Email address'),
-    '#description' => t('We will email you a link that signs you in. No password needed.'),
+    '#description' => magic_login_show_core() ? t('We’ll email you a link to sign in. No password needed.') : '',
     '#attributes' => [
       'autocomplete' => 'email',
       'autocapitalize' => 'none',
@@ -101,17 +344,35 @@ function magic_login_form_user_login_form_alter(array &$form, FormStateInterface
     ],
   ];
 
-  $form['magic_login']['magic_login_submit'] = [
-    '#type' => 'submit',
-    '#name' => 'magic_login_submit',
-    '#value' => t('Email me a sign-in link'),
-    // Button-level handlers: these replace the form-level ones, so none of
-    // UserLoginForm's authentication validators run for this button.
+  $form['magic_login']['approval'] = magic_login_approval_notice();
+
+  // Two buttons: a link or a code. Button-level handlers replace the
+  // form-level ones, so none of UserLoginForm's authentication validators
+  // run for them.
+  //
+  // No #limit_validation_errors: when the pressed button has it, the CAPTCHA
+  // element skips its own processing and validation entirely
+  // (\Drupal\captcha\Element\Captcha::processCaptchaElement()), so a POST
+  // without the Altcha solution went through. Instead the username and
+  // password are not #required; the password button still fails on empty
+  // values (UserLoginForm::validateFinal(): "Unrecognized username or
+  // password"). Tested on the live site: without the Altcha solution, both
+  // buttons are refused.
+  $form['name']['#required'] = FALSE;
+  $form['pass']['#required'] = FALSE;
+  $form['magic_login']['methods'] = magic_login_method_buttons((string) t('Email me a sign-in link'), [
     '#validate' => ['magic_login_user_login_form_validate'],
     '#submit' => ['magic_login_user_login_form_submit'],
-    // Keeps the required username/password fields from erroring.
-    '#limit_validation_errors' => [['magic_login_mail']],
-  ];
+  ], !magic_login_show_core());
+  $form['#attached']['library'][] = 'magic_login/forms';
+
+  // The security check belongs before the buttons, not after them.
+  if (isset($form['captcha']) && !magic_login_show_core()) {
+    $form['magic_login']['captcha'] = $form['captcha'];
+    $form['magic_login']['captcha']['#weight'] = 5;
+    $form['magic_login']['methods']['#weight'] = 10;
+    unset($form['captcha']);
+  }
 }
 
 /**
@@ -123,7 +384,7 @@ function magic_login_user_login_form_validate(array &$form, FormStateInterface $
   $mail = trim((string) $form_state->getValue('magic_login_mail'));
 
   if ($mail === '') {
-    $form_state->setErrorByName('magic_login_mail', t('Enter the email address to send the link to.'));
+    $form_state->setErrorByName('magic_login_mail', t('Type your email address.'));
   }
 
   // Deliberately no "no account with that address" error: that would turn the
@@ -134,6 +395,11 @@ function magic_login_user_login_form_validate(array &$form, FormStateInterface $
  * Submit handler for the magic-link button on the login form.
  */
 function magic_login_user_login_form_submit(array &$form, FormStateInterface $form_state): void {
+  if (magic_login_code_pressed($form_state)) {
+    magic_login_request_code((string) $form_state->getValue('magic_login_mail'));
+    $form_state->setRedirect('magic_login.code');
+    return;
+  }
   $ip = \Drupal::requestStack()->getCurrentRequest()?->getClientIp();
 
   \Drupal::service('magic_login.link_manager')
@@ -141,8 +407,80 @@ function magic_login_user_login_form_submit(array &$form, FormStateInterface $fo
 
   // Same message for every outcome -- see MagicLoginRequestForm::submitForm().
   \Drupal::messenger()->addStatus(
-    t('If that address belongs to an account, a sign-in link is on its way. Check your inbox.')
+    t('If we know that email, we’ve sent you a sign-in link. Check your email.')
   );
 
   $form_state->setRedirect('user.login');
+}
+
+/**
+ * Whether an account works with passwords: administrators only.
+ *
+ * Everyone else signs in with an emailed link or code and never has, or
+ * needs, a password. "Administrator" means a role marked as the admin role
+ * (Role::isAdmin()), or uid 1.
+ */
+function magic_login_uses_passwords(AccountInterface $account): bool {
+  if ((int) $account->id() === 1) {
+    return TRUE;
+  }
+  foreach (\Drupal\user\Entity\Role::loadMultiple($account->getRoles(TRUE)) as $role) {
+    if ($role->isAdmin()) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter() for user_form.
+ *
+ * Passwordless accounts: on the account edit form, everything about
+ * passwords (Current password, Password, Confirm password, the strength
+ * meter, "Reset your password") is gone unless the person editing is an
+ * administrator (magic_login_uses_passwords()).
+ *
+ * Core only lets an account change its own email with the current password
+ * (ProtectedUserFieldConstraint), which a passwordless account does not
+ * have; so the email is shown read-only, with where to go to change it,
+ * rather than failing on save. Administrators can still change it.
+ */
+function magic_login_form_user_form_alter(array &$form, FormStateInterface $form_state): void {
+  if (magic_login_uses_passwords(\Drupal::currentUser())) {
+    return;
+  }
+  foreach (['pass', 'current_pass'] as $key) {
+    if (isset($form['account'][$key])) {
+      // #access FALSE: not rendered, and any submitted value is ignored.
+      $form['account'][$key]['#access'] = FALSE;
+    }
+  }
+  if (isset($form['account']['mail']) && !\Drupal::currentUser()->hasPermission('administer users')) {
+    $form['account']['mail']['#disabled'] = TRUE;
+    $form['account']['mail']['#description'] = t('This is the email you sign in with. To change it, <a href=":contact">contact us</a>.', [
+      ':contact' => \Drupal::moduleHandler()->moduleExists('contact') ? \Drupal\Core\Url::fromRoute('contact.site_page')->toString() : '/',
+    ]);
+  }
+}
+
+/**
+ * Implements hook_user_format_name_alter().
+ *
+ * Accounts created by a sign-in link get a username derived from the email
+ * address; the optional name from the welcome step reads better.
+ */
+function magic_login_user_format_name_alter(string &$name, AccountInterface $account): void {
+  if ($account->isAnonymous()) {
+    return;
+  }
+  // The current user arrives as a session object, not an entity; entity
+  // loads are statically cached, so this costs one load per request.
+  if (!$account instanceof UserInterface) {
+    $account = \Drupal::entityTypeManager()->getStorage('user')->load($account->id());
+  }
+  if ($account instanceof UserInterface
+    && $account->hasField('field_display_name')
+    && !$account->get('field_display_name')->isEmpty()) {
+    $name = (string) $account->get('field_display_name')->value;
+  }
 }

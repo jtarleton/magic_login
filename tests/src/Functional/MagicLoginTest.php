@@ -35,7 +35,7 @@ final class MagicLoginTest extends BrowserTestBase {
 
     $this->drupalGet('user/login/link');
     $this->submitForm(['mail' => $account->getEmail()], 'Email me a sign-in link');
-    $this->assertSession()->pageTextContains('If that address belongs to an account');
+    $this->assertSession()->pageTextContains('If we know that email');
 
     $url = $this->extractLink();
     $this->assertNotNull($url, 'A sign-in link was mailed.');
@@ -84,7 +84,7 @@ final class MagicLoginTest extends BrowserTestBase {
     $this->submitForm(['mail' => 'nobody@example.com'], 'Email me a sign-in link');
     $unknown = $this->getSession()->getPage()->getContent();
 
-    $this->assertSession()->pageTextContains('If that address belongs to an account');
+    $this->assertSession()->pageTextContains('If we know that email');
     $this->assertSame(
       $this->stripVolatile($known),
       $this->stripVolatile($unknown),
@@ -104,7 +104,7 @@ final class MagicLoginTest extends BrowserTestBase {
       'Email me a sign-in link',
     );
 
-    $this->assertSession()->pageTextContains('If that address belongs to an account');
+    $this->assertSession()->pageTextContains('If we know that email');
     $this->assertSession()->pageTextNotContains('Unrecognized username or password');
 
     // The account must still be able to log in with a password afterwards.

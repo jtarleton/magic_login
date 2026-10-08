@@ -1,0 +1,12 @@
+# The sign-in forms: link-or-code buttons, and the code page (auto-submit
+# once all digits are in).
+forms:
+  version: 1.4
+  css:
+    component:
+      css/magic_login.css: {}
+  js:
+    js/magic_login_code.js: {}
+  dependencies:
+    - core/drupal
+    - core/once

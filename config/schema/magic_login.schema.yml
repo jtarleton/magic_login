@@ -11,6 +11,12 @@ magic_login.settings:
     auto_register:
       type: boolean
       label: 'Create accounts for unrecognised email addresses'
+    public_signup:
+      type: boolean
+      label: 'Public sign-up form enabled'
+    require_approval:
+      type: boolean
+      label: 'New accounts wait for admin approval'
     auto_register_roles:
       type: sequence
       label: 'Roles for auto-created accounts'
@@ -35,3 +41,33 @@ magic_login.settings:
     flood_ip_window:
       type: integer
       label: 'IP rate limit window in seconds'
+    code_expiry:
+      type: integer
+      label: 'Code expiry in seconds'
+    code_max_attempts:
+      type: integer
+      label: 'Wrong tries allowed per code'
+    flood_verify_ip_limit:
+      type: integer
+      label: 'Code attempts allowed per IP address'
+    flood_verify_email_limit:
+      type: integer
+      label: 'Code attempts allowed per email address'
+    flood_verify_window:
+      type: integer
+      label: 'Code attempt window in seconds'
+    landing_path:
+      type: string
+      label: 'Internal path to land on after signing in'
+    signup_role_excluded:
+      type: sequence
+      label: 'Roles never given to self-created accounts'
+      sequence:
+        type: string
+        label: 'Role ID'
+    signup_role_permissions:
+      type: sequence
+      label: 'Permissions a role may carry and still be given to self-created accounts'
+      sequence:
+        type: string
+        label: 'Permission'

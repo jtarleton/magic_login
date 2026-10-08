@@ -6,10 +6,8 @@ namespace Drupal\magic_login\Form;
 
 use Drupal\Core\Form\FormBase;
 use Drupal\Core\Form\FormStateInterface;
-use Drupal\Core\Url;
 use Drupal\magic_login\MagicLinkManagerInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
-use Symfony\Component\HttpFoundation\RequestStack;
 
 /**
  * Standalone "email me a sign-in link" form at /user/login/link.
@@ -17,8 +15,7 @@ use Symfony\Component\HttpFoundation\RequestStack;
 final class MagicLoginRequestForm extends FormBase {
 
   public function __construct(
-    private readonly MagicLinkManagerInterface $linkManager,
-    private readonly RequestStack $requestStack,
+    protected MagicLinkManagerInterface $linkManager,
   ) {}
 
   /**
@@ -27,7 +24,6 @@ final class MagicLoginRequestForm extends FormBase {
   public static function create(ContainerInterface $container): self {
     return new self(
       $container->get('magic_login.link_manager'),
-      $container->get('request_stack'),
     );
   }
 
@@ -45,7 +41,7 @@ final class MagicLoginRequestForm extends FormBase {
     $form['#cache']['max-age'] = 0;
 
     $form['intro'] = [
-      '#markup' => '<p>' . $this->t('Enter your email address and we will send you a link that signs you in. No password needed.') . '</p>',
+      '#markup' => '<p>' . $this->t('Type your email. We’ll send you a link or a 6-digit code to sign in. No password needed.') . '</p>',
     ];
 
     $form['mail'] = [
@@ -60,20 +56,11 @@ final class MagicLoginRequestForm extends FormBase {
       ],
     ];
 
-    $form['actions'] = ['#type' => 'actions'];
-    $form['actions']['submit'] = [
-      '#type' => 'submit',
-      '#value' => $this->t('Email me a sign-in link'),
-      '#button_type' => 'primary',
-    ];
+    $form['approval'] = magic_login_approval_notice();
 
-    $form['password_login'] = [
-      '#type' => 'link',
-      '#title' => $this->t('Sign in with a password instead'),
-      '#url' => Url::fromRoute('user.login'),
-      '#prefix' => '<p>',
-      '#suffix' => '</p>',
-    ];
+    $form['actions'] = ['#type' => 'actions'];
+    $form['actions']['methods'] = magic_login_method_buttons((string) $this->t('Email me a sign-in link'));
+    $form['#attached']['library'][] = 'magic_login/forms';
 
     return $form;
   }
@@ -82,13 +69,18 @@ final class MagicLoginRequestForm extends FormBase {
    * {@inheritdoc}
    */
   public function submitForm(array &$form, FormStateInterface $form_state): void {
-    $ip = $this->requestStack->getCurrentRequest()?->getClientIp();
+    if (magic_login_code_pressed($form_state)) {
+      magic_login_request_code((string) $form_state->getValue('mail'));
+      $form_state->setRedirect('magic_login.code');
+      return;
+    }
+    $ip = $this->getRequest()->getClientIp();
     $this->linkManager->requestLink((string) $form_state->getValue('mail'), $ip);
 
     // One message for every outcome. Branching here -- "no account with that
     // address", "you're doing that too often" -- hands an attacker a list of
     // which addresses are registered.
-    $this->messenger()->addStatus($this->t('If that address belongs to an account, a sign-in link is on its way. Check your inbox.'));
+    $this->messenger()->addStatus($this->t('If we know that email, we’ve sent you a sign-in link. Check your email.'));
 
     $form_state->setRedirect('user.login');
   }

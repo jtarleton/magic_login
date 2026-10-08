@@ -11,6 +11,7 @@ use Drupal\Component\Utility\EmailValidatorInterface;
 use Drupal\Core\Config\ConfigFactoryInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Flood\FloodInterface;
+use Drupal\Core\KeyValueStore\KeyValueExpirableFactoryInterface;
 use Drupal\Core\Language\LanguageManagerInterface;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Password\PasswordGeneratorInterface;
@@ -33,6 +34,18 @@ use Psr\Log\LoggerInterface;
  *  - It is invalidated by a password change or an email change, because both
  *    are inputs. A user who suspects a leaked link can kill it by logging in.
  *
+ * Sign-in codes
+ * --------------
+ * A code is six random digits, too short to be stateless, so one pending code
+ * per address is kept in the expirable key/value store (collection
+ * magic_login_code, keyed by the same address hash the flood table uses).
+ * Only an HMAC of the code is stored, over the same account state as a link
+ * (last login, email, password hash), so a code also dies when the account
+ * signs in by any route. Wrong guesses are capped per code (code_max_attempts,
+ * then it is discarded) and rate limited per address and per IP; with three
+ * codes an hour per address, that is at most ~15 guesses an hour against a
+ * million possibilities.
+ *
  * Nothing here reuses core's password-reset token or the /user/reset route.
  * That is deliberate: reset links carry a 24h default lifetime and land the
  * user on a "set a new password" affordance, neither of which we want.
@@ -49,6 +62,17 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
    */
   private const FLOOD_EMAIL = 'magic_login.request_email';
 
+  /**
+   * Flood event names for code verification attempts.
+   */
+  private const FLOOD_VERIFY_IP = 'magic_login.verify_ip';
+  private const FLOOD_VERIFY_EMAIL = 'magic_login.verify_email';
+
+  /**
+   * Expirable key/value collection holding pending codes.
+   */
+  private const CODE_COLLECTION = 'magic_login_code';
+
   public function __construct(
     private readonly EntityTypeManagerInterface $entityTypeManager,
     private readonly ConfigFactoryInterface $configFactory,
@@ -60,22 +84,24 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
     private readonly EmailValidatorInterface $emailValidator,
     private readonly PasswordGeneratorInterface $passwordGenerator,
     private readonly LoggerInterface $logger,
+    private readonly KeyValueExpirableFactoryInterface $keyValueExpirable,
   ) {}
 
   /**
    * {@inheritdoc}
    */
-  public function requestLink(string $email, ?string $ip = NULL): string {
+  public function requestLink(string $email, ?string $ip = NULL, bool $allowSignup = FALSE, string $method = self::METHOD_LINK): string {
     $email = trim($email);
     if ($email === '' || !$this->emailValidator->isValid($email)) {
       return self::RESULT_INVALID;
     }
+    $method = $method === self::METHOD_CODE ? self::METHOD_CODE : self::METHOD_LINK;
 
     $config = $this->configFactory->get('magic_login.settings');
 
     // Rate limit before doing anything that costs a query or an email. The
     // email identifier is hashed so the flood table never holds addresses.
-    $emailKey = Crypt::hashBase64(mb_strtolower($email) . Settings::getHashSalt());
+    $emailKey = $this->emailKey($email);
     $ipAllowed = $this->flood->isAllowed(
       self::FLOOD_IP,
       (int) $config->get('flood_ip_limit'),
@@ -102,13 +128,21 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
     $account = $this->loadByEmail($email);
 
     if (!$account instanceof UserInterface) {
-      if (!$config->get('auto_register') || !$this->domainIsPermitted($email)) {
+      if (!$this->accountCreationAllowed($allowSignup) || !$this->domainIsPermitted($email)) {
         return self::RESULT_NO_ACCOUNT;
       }
       $account = $this->createAccount($email);
       if (!$account instanceof UserInterface) {
         return self::RESULT_NO_ACCOUNT;
       }
+      if (!$account->isActive()) {
+        // Blocked until an admin approves it: no sign-in link yet. The user
+        // gets "pending approval", the site address gets the admin copy.
+        _user_mail_notify('register_pending_approval', $account);
+        return self::RESULT_PENDING;
+      }
+      // Approval is off: the account is live, so fall through and send its
+      // first link. Nothing is usable until that link is clicked.
     }
 
     if (!$account->isActive()) {
@@ -118,7 +152,137 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
       return self::RESULT_BLOCKED;
     }
 
-    return $this->send($account) ? self::RESULT_SENT : self::RESULT_MAIL_FAILED;
+    $sent = $method === self::METHOD_CODE ? $this->sendCode($account, $emailKey) : $this->send($account);
+    return $sent ? self::RESULT_SENT : self::RESULT_MAIL_FAILED;
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function verifyCode(string $email, string $code, ?string $ip = NULL): ?UserInterface {
+    $email = trim($email);
+    // Only the digits count: "123 456", "123-456", or a pasted sentence
+    // ("Your code is: 123456"). Anything that is not then exactly the right
+    // number of digits is simply wrong.
+    $code = preg_replace('/\D+/', '', $code) ?? '';
+    if ($email === '' || !preg_match('/^\d{' . self::CODE_LENGTH . '}$/', $code)) {
+      return NULL;
+    }
+
+    $config = $this->configFactory->get('magic_login.settings');
+    $emailKey = $this->emailKey($email);
+    $window = (int) ($config->get('flood_verify_window') ?: 3600);
+    if (!$this->flood->isAllowed(self::FLOOD_VERIFY_IP, (int) ($config->get('flood_verify_ip_limit') ?: 30), $window, $ip)
+      || !$this->flood->isAllowed(self::FLOOD_VERIFY_EMAIL, (int) ($config->get('flood_verify_email_limit') ?: 10), $window, $emailKey)) {
+      $this->logger->warning('Rate limit hit for sign-in code verification.');
+      return NULL;
+    }
+    // Every attempt counts, right or wrong.
+    $this->flood->register(self::FLOOD_VERIFY_IP, $window, $ip);
+    $this->flood->register(self::FLOOD_VERIFY_EMAIL, $window, $emailKey);
+
+    $store = $this->keyValueExpirable->get(self::CODE_COLLECTION);
+    $pending = $store->get($emailKey);
+    if (!is_array($pending) || !isset($pending['uid'], $pending['created'], $pending['hash'])) {
+      return NULL;
+    }
+
+    $now = $this->time->getRequestTime();
+    $expiry = $this->codeExpiry();
+    $maxAttempts = (int) ($config->get('code_max_attempts') ?: 5);
+    if ($now - (int) $pending['created'] > $expiry || $now < (int) $pending['created'] || (int) ($pending['attempts'] ?? 0) >= $maxAttempts) {
+      $store->delete($emailKey);
+      return NULL;
+    }
+
+    $account = $this->entityTypeManager->getStorage('user')->load((int) $pending['uid']);
+    if (!$account instanceof UserInterface || !$account->isActive() || (int) $account->id() === 0
+      || mb_strtolower((string) $account->getEmail()) !== mb_strtolower($email)) {
+      $store->delete($emailKey);
+      return NULL;
+    }
+
+    if (!hash_equals($this->codeHash($account, (int) $pending['created'], $code), (string) $pending['hash'])) {
+      $pending['attempts'] = (int) ($pending['attempts'] ?? 0) + 1;
+      if ($pending['attempts'] >= $maxAttempts) {
+        $store->delete($emailKey);
+        $this->logger->notice('Sign-in code for account %uid discarded after too many wrong attempts.', ['%uid' => $account->id()]);
+      }
+      else {
+        $store->setWithExpire($emailKey, $pending, max(1, $expiry - ($now - (int) $pending['created'])));
+      }
+      return NULL;
+    }
+
+    // Single use: gone now, and the login that follows changes the HMAC
+    // input as well.
+    $store->delete($emailKey);
+    return $account;
+  }
+
+  /**
+   * Issues a new code for an account, replacing any pending one, and returns
+   * it. Public for tests and admin tooling; normal use goes through
+   * requestLink(..., METHOD_CODE).
+   */
+  public function issueCode(UserInterface $account): string {
+    $code = str_pad((string) random_int(0, 10 ** self::CODE_LENGTH - 1), self::CODE_LENGTH, '0', STR_PAD_LEFT);
+    $created = $this->time->getRequestTime();
+    $this->keyValueExpirable->get(self::CODE_COLLECTION)->setWithExpire($this->emailKey((string) $account->getEmail()), [
+      'uid' => (int) $account->id(),
+      'created' => $created,
+      'hash' => $this->codeHash($account, $created, $code),
+      'attempts' => 0,
+    ], $this->codeExpiry());
+    return $code;
+  }
+
+  /**
+   * Seconds a code stays valid.
+   */
+  private function codeExpiry(): int {
+    return (int) ($this->configFactory->get('magic_login.settings')->get('code_expiry') ?: 600);
+  }
+
+  /**
+   * The flood/storage identifier for an address: never the address itself.
+   */
+  private function emailKey(string $email): string {
+    return Crypt::hashBase64(mb_strtolower(trim($email)) . Settings::getHashSalt());
+  }
+
+  /**
+   * HMAC of a code, bound to the account's current state like a link.
+   */
+  private function codeHash(UserInterface $account, int $created, string $code): string {
+    return Crypt::hmacBase64(implode(':', [
+      'magic_login_code',
+      $account->id(),
+      $created,
+      $code,
+      $account->getLastLoginTime() ?? 0,
+      $account->getEmail() ?? '',
+      $account->getPassword() ?? '',
+    ]), Settings::getHashSalt());
+  }
+
+  /**
+   * Emails a new sign-in code.
+   */
+  private function sendCode(UserInterface $account, string $emailKey): bool {
+    $code = $this->issueCode($account);
+    $message = $this->mailManager->mail('magic_login', 'code', $account->getEmail(), $account->getPreferredLangcode(), [
+      'account' => $account,
+      'code' => $code,
+      'expiry' => $this->codeExpiry(),
+    ]);
+    if (empty($message['result'])) {
+      $this->keyValueExpirable->get(self::CODE_COLLECTION)->delete($emailKey);
+      $this->logger->error('Failed to send a sign-in code to account %uid.', ['%uid' => $account->id()]);
+      return FALSE;
+    }
+    $this->logger->info('Sign-in code sent to account %uid.', ['%uid' => $account->id()]);
+    return TRUE;
   }
 
   /**
@@ -211,19 +375,24 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
       'name' => $this->generateUsername($email),
       'mail' => $email,
       // A random password the user never learns. It keeps the account from
-      // having a NULL password (which would make the token input a constant)
-      // and leaves the normal reset flow available if they ever want one.
+      // having a NULL password (which would make the token input a constant).
       'pass' => $this->passwordGenerator->generate(32),
-      'status' => 1,
+      // Self-created accounts wait for admin approval unless it is turned off.
+      'status' => magic_login_requires_approval() ? 0 : 1,
       'langcode' => $this->languageManager->getCurrentLanguage()->getId(),
       'preferred_langcode' => $this->languageManager->getCurrentLanguage()->getId(),
       'init' => $email,
     ]);
 
     foreach ((array) $config->get('auto_register_roles') as $rid) {
-      if (is_string($rid) && $rid !== '') {
-        $account->addRole($rid);
+      if (!is_string($rid) || $rid === '') {
+        continue;
       }
+      if (!self::isSafeSignupRole($rid)) {
+        $this->logger->error('Refused to give role %rid to a self-created account: it is excluded, or has permissions beyond signup_role_permissions.', ['%rid' => $rid]);
+        continue;
+      }
+      $account->addRole($rid);
     }
 
     try {
@@ -284,6 +453,23 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
   }
 
   /**
+   * Whether an unknown address may get a new account.
+   *
+   * Never while core's "Who can register accounts?" is "Administrators only"
+   * (user.settings:register = admin_only), whatever this module's own
+   * settings say or what the caller asks for: that core setting is the
+   * site-wide "visitors cannot create accounts" switch. Otherwise, the
+   * public sign-up form (when public_signup is on) or auto_register.
+   */
+  private function accountCreationAllowed(bool $allowSignup): bool {
+    if ($this->configFactory->get('user.settings')->get('register') === UserInterface::REGISTER_ADMINISTRATORS_ONLY) {
+      return FALSE;
+    }
+    $config = $this->configFactory->get('magic_login.settings');
+    return ($allowSignup && $config->get('public_signup')) || $config->get('auto_register');
+  }
+
+  /**
    * Applies the allow/deny domain lists to auto-registration.
    */
   private function domainIsPermitted(string $email): bool {
@@ -320,6 +506,27 @@ final class MagicLinkManager implements MagicLinkManagerInterface {
   /**
    * Hands a link message to the mail system.
    */
+  /**
+   * Whether a role is limited enough for a self-created account.
+   *
+   * Not admin, not listed in signup_role_excluded, and no permission
+   * outside signup_role_permissions (empty: the role may have none). Checked
+   * when the account is created, so a role that gains permissions later
+   * stops being assigned.
+   */
+  public static function isSafeSignupRole(string $rid): bool {
+    $config = \Drupal::config('magic_login.settings');
+    $excluded = array_merge(['anonymous', 'authenticated'], (array) $config->get('signup_role_excluded'));
+    if (in_array($rid, $excluded, TRUE)) {
+      return FALSE;
+    }
+    $role = \Drupal::entityTypeManager()->getStorage('user_role')->load($rid);
+    if (!$role instanceof \Drupal\user\RoleInterface || $role->isAdmin()) {
+      return FALSE;
+    }
+    return array_diff($role->getPermissions(), (array) $config->get('signup_role_permissions')) === [];
+  }
+
   private function send(UserInterface $account): bool {
     $timestamp = $this->time->getRequestTime();
     $langcode = $account->getPreferredLangcode();
