@@ -16,7 +16,7 @@ landing_path: '/'
 # section). Disable to keep /user/login untouched and use /user/login/link only.
 login_form_integration: true
 
-# Create an account when an unrecognised email address requests a link.
+# Create an account when an unrecognized email address requests a link.
 # NOTE: this intentionally bypasses user.settings:register. Leave it off unless
 # you mean it.
 auto_register: false

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\magic_login\EventSubscriber;
 
+use Drupal\Core\Config\ConfigFactoryInterface;
 use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
@@ -19,6 +20,10 @@ use Symfony\Component\HttpKernel\KernelEvents;
 final class PasswordRouteSubscriber implements EventSubscriberInterface {
 
   private const ROUTES = ['user.pass', 'user.pass.http'];
+
+  public function __construct(
+    private readonly ConfigFactoryInterface $configFactory,
+  ) {}
 
   /**
    * {@inheritdoc}
@@ -36,7 +41,7 @@ final class PasswordRouteSubscriber implements EventSubscriberInterface {
     if (!in_array($request->attributes->get('_route'), self::ROUTES, TRUE)) {
       return;
     }
-    if (!\Drupal::config('magic_login.settings')->get('login_form_integration')) {
+    if (!$this->configFactory->get('magic_login.settings')->get('login_form_integration')) {
       return;
     }
     if (!magic_login_show_core()) {

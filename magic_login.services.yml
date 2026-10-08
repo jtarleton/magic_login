@@ -1,5 +1,4 @@
 services:
-
   logger.channel.magic_login:
     parent: logger.channel_base
     arguments: ['magic_login']
@@ -24,5 +23,6 @@ services:
 
   magic_login.password_route_subscriber:
     class: Drupal\magic_login\EventSubscriber\PasswordRouteSubscriber
+    arguments: ['@config.factory']
     tags:
       - { name: event_subscriber }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Drupal\magic_login\Form;
 
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Core\Form\FormBase;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Url;
@@ -37,13 +38,17 @@ final class MagicLoginConfirmForm extends FormBase {
 
   public function __construct(
     protected MagicLinkManagerInterface $linkManager,
+    protected ModuleHandlerInterface $moduleHandler,
   ) {}
 
   /**
    * {@inheritdoc}
    */
   public static function create(ContainerInterface $container): self {
-    return new self($container->get('magic_login.link_manager'));
+    return new self(
+      $container->get('magic_login.link_manager'),
+      $container->get('module_handler'),
+    );
   }
 
   /**
@@ -171,7 +176,7 @@ final class MagicLoginConfirmForm extends FormBase {
       // login would never reach the browser. Do what it does otherwise, then
       // drop the old session's data and record so nothing carries over.
       $this->getLogger('user')->info('Session closed for %name.', ['%name' => $current->getAccountName()]);
-      \Drupal::moduleHandler()->invokeAll('user_logout', [$current]);
+      $this->moduleHandler->invokeAll('user_logout', [$current]);
       $session = $this->getRequest()->getSession();
       $session->clear();
       $session->migrate(TRUE);

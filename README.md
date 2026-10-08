@@ -63,7 +63,7 @@ The **Administer magic login** permission controls access to the settings.
 Site mail must work (Drupal's outgoing mail, or an SMTP / mailer module): both
 the link and the code are sent by email.
 
-## Site-specific behaviour
+## Site-specific behavior
 
 The module is project-agnostic. What a site decides is in settings, or in the
 site's own code:
@@ -205,7 +205,7 @@ sending mail to arbitrary addresses, with your domain's reputation attached.
 
 ## Auto-registration
 
-Off by default. When enabled, an unrecognised address gets an account with:
+Off by default. When enabled, an unrecognized address gets an account with:
 
 - a username derived from the local part, transliterated and disambiguated
   against existing names

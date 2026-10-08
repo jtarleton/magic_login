@@ -10,7 +10,7 @@ magic_login.settings:
       label: 'Integrate with the core login form'
     auto_register:
       type: boolean
-      label: 'Create accounts for unrecognised email addresses'
+      label: 'Create accounts for unrecognized email addresses'
     public_signup:
       type: boolean
       label: 'Public sign-up form enabled'

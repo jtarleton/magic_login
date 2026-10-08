@@ -111,7 +111,7 @@ final class SettingsForm extends ConfigFormBase {
 
     $form['registration']['auto_register'] = [
       '#type' => 'checkbox',
-      '#title' => $this->t('Create an account when an unrecognised address requests a link'),
+      '#title' => $this->t('Create an account when an unrecognized address requests a link'),
       '#default_value' => $config->get('auto_register'),
       '#description' => $this->t('This bypasses the "Who can register accounts?" setting on the <a href=":url">account settings</a> page by design: it is what removes the signup step. Anyone who can receive mail at an address permitted below gets an account.', [
         ':url' => '/admin/config/people/accounts',

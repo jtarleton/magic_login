@@ -161,8 +161,9 @@ final class MagicLoginTest extends BrowserTestBase {
   /**
    * Whether the browser session is signed in as the account.
    *
-   * drupalUserIsLoggedIn() only knows sessions opened by drupalLogin(), so
-   * this asks the site: only the account itself may open its edit form.
+   * BrowserTestBase::drupalUserIsLoggedIn() only knows sessions opened by
+   * drupalLogin(), so this asks the site: only the account itself may open
+   * its edit form.
    */
   private function isSignedInAs(AccountInterface $account): bool {
     $this->drupalGet('user/' . $account->id() . '/edit');
